@@ -91,6 +91,12 @@ class PowerShadesPlatform {
       this.accessories.set(uuid, accessory);
     }
 
+    // Update AccessoryInformation service name (what HomeKit displays)
+    const infoService = accessory.getService(this.api.hap.Service.AccessoryInformation);
+    if (infoService) {
+      infoService.setCharacteristic(this.api.hap.Characteristic.Name, shade.name);
+    }
+
     const service =
       accessory.getService(this.api.hap.Service.WindowCovering) ||
       accessory.addService(this.api.hap.Service.WindowCovering, shade.name || "PowerShade");
