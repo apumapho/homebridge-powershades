@@ -20,6 +20,7 @@ class PowerShadesPlatform {
     this.fastPollDuration = Math.max(Number(this.config.fastPollDuration) || 30, 5);
     this.email = this.config.email;
     this.password = this.config.password;
+    this.apiToken = this.config.apiToken;
     this.baseUrl = this.config.baseUrl;
     this.shadeListCache = [];
     this.shadeListCacheTime = 0;
@@ -27,14 +28,16 @@ class PowerShadesPlatform {
     this.lastActivityTime = 0;
     this.pollTimer = null;
 
-    if (!this.email || !this.password) {
-      this.log.error("[PowerShades] Missing email/password in config.json");
+    // Require either API token OR email+password
+    if (!this.apiToken && (!this.email || !this.password)) {
+      this.log.error("[PowerShades] Missing credentials: provide either 'apiToken' OR 'email' and 'password' in config.json");
       return;
     }
 
     this.psApi = new PowerShadesApi({
       email: this.email,
       password: this.password,
+      apiToken: this.apiToken,
       baseUrl: this.baseUrl,
       logger: this.log,
     });

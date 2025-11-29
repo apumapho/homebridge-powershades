@@ -29,7 +29,37 @@ npm install -g homebridge-powershades
 
 ## Configuration
 
-Configure the plugin through the Homebridge Config UI X interface, or manually edit your `config.json`:
+Configure the plugin through the Homebridge Config UI X interface, or manually edit your `config.json`.
+
+### Authentication
+
+You can authenticate using **either** an API token (recommended) or your email/password:
+
+**Option 1: API Token (Recommended)**
+
+More secure - doesn't store your password. Get your API token from the PowerShades dashboard:
+1. Go to [PowerShades Dashboard](https://dashboard.powershades.com)
+2. Click your name (top right)
+3. Click "My Account"
+4. Under "Authorized Applications", click "Get New API Token"
+
+```json
+{
+  "platforms": [
+    {
+      "platform": "PowerShades",
+      "name": "PowerShades",
+      "apiToken": "your-api-token-here",
+      "pollInterval": 10,
+      "fastPollInterval": 1,
+      "fastPollDuration": 30,
+      "shadeListCacheTTL": 300
+    }
+  ]
+}
+```
+
+**Option 2: Email and Password**
 
 ```json
 {
@@ -52,8 +82,9 @@ Configure the plugin through the Homebridge Config UI X interface, or manually e
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `email` | *required* | Your PowerShades account email |
-| `password` | *required* | Your PowerShades account password |
+| `apiToken` | *optional* | Your PowerShades API token (recommended) |
+| `email` | *optional* | Your PowerShades account email (if not using apiToken) |
+| `password` | *optional* | Your PowerShades account password (if not using apiToken) |
 | `pollInterval` | `10` | Polling interval in seconds when idle (2-60) |
 | `fastPollInterval` | `1` | Polling interval in seconds after activity (1-5) |
 | `fastPollDuration` | `30` | How long to use fast polling after activity (5-120) |

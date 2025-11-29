@@ -33,11 +33,13 @@ async function main() {
   const scenes = await api.getScenes();
   const schedules = await api.getSchedules();
 
-  console.log("Login OK");
-  console.log(`Base URL used: ${api.activeBase}`);
-  console.log(`Shades: ${Array.isArray(shades) ? shades.length : "unknown"}`);
-  console.log(`Scenes: ${Array.isArray(scenes) ? scenes.length : "unknown"}`);
-  console.log(`Schedules: ${Array.isArray(schedules) ? schedules.length : "unknown"}`);
+  // Try to fetch devices
+  let devices = [];
+  try {
+    devices = await api.getDevices();
+  } catch (err) {
+    console.log(`Note: Could not fetch devices - ${err.message}`);
+  }
 
   const printList = (label, payload) => {
     console.log(`\n${label.toUpperCase()}`);
@@ -50,7 +52,37 @@ async function main() {
     });
   };
 
+  console.log("Login OK");
+  console.log(`Base URL used: ${api.activeBase}`);
+  console.log(`Shades: ${Array.isArray(shades) ? shades.length : "unknown"}`);
+  console.log(`Devices: ${Array.isArray(devices) ? devices.length : "unknown"}`);
+  console.log(`Scenes: ${Array.isArray(scenes) ? scenes.length : "unknown"}`);
+  console.log(`Schedules: ${Array.isArray(schedules) ? schedules.length : "unknown"}`);
+
+  // Fetch shade attributes
+  console.log("\nFetching shade attributes...");
+  try {
+    const shadeAttributes = await api.getShadeAttributes();
+    console.log(`Found ${shadeAttributes.length} shade attribute records`);
+    if (shadeAttributes.length > 0) {
+      console.log("\nSAMPLE SHADE ATTRIBUTES:");
+      console.log(JSON.stringify(shadeAttributes.slice(0, 10), null, 2));
+
+      // Find manufacturer/model/serial/firmware attributes
+      const relevantAttrs = shadeAttributes.filter(a =>
+        ['Manufacturer', 'Model', 'SerialNumber', 'Serial', 'Firmware', 'FirmwareVersion', 'Version'].includes(a.attribute)
+      );
+      if (relevantAttrs.length > 0) {
+        console.log("\n\nRELEVANT ATTRIBUTES (Manufacturer/Model/Serial/Firmware):");
+        console.log(JSON.stringify(relevantAttrs, null, 2));
+      }
+    }
+  } catch (err) {
+    console.log(`Could not fetch shade attributes: ${err.message}`);
+  }
+
   printList("shades", shades);
+  printList("devices", devices);
   printList("scenes", scenes);
   printList("schedules", schedules);
 }

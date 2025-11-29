@@ -23,17 +23,32 @@ const httpAgent = new http.Agent({
 class PowerShadesApiError extends Error {}
 
 class PowerShadesApi {
-  constructor({ email, password, baseUrl = DEFAULT_BASE, logger = console }) {
+  constructor({ email, password, apiToken, baseUrl = DEFAULT_BASE, logger = console }) {
     this.email = email;
     this.password = password;
+    this.apiToken = apiToken;
     this.baseCandidates = dedupeCandidates(baseUrl);
     this.logger = logger;
-    this.accessToken = null;
+    this.accessToken = apiToken || null; // Use API token directly if provided
     this.refreshToken = null;
     this.activeBase = null;
+
+    // Log authentication method
+    if (this.apiToken) {
+      this.logger.info?.("[PowerShades] Using API token authentication");
+    } else {
+      this.logger.info?.("[PowerShades] Using email/password authentication");
+    }
   }
 
   async login() {
+    // If using API token, skip login and set active base
+    if (this.apiToken) {
+      this.activeBase = this.baseCandidates[0];
+      return { token: this.apiToken };
+    }
+
+    // Otherwise, use email/password authentication
     let lastError;
     for (const base of this.baseCandidates) {
       try {
@@ -69,6 +84,13 @@ class PowerShadesApi {
 
   async getShades() {
     const data = await this.request("get", "/shades/");
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
+  }
+
+  async getShadeAttributes() {
+    const data = await this.request("get", "/shadeattributes/");
     if (Array.isArray(data)) return data;
     if (data && Array.isArray(data.results)) return data.results;
     return [];

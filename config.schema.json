@@ -13,16 +13,24 @@
         "default": "PowerShades",
         "description": "The name that will appear in your Homebridge log."
       },
+      "apiToken": {
+        "title": "API Token (Recommended)",
+        "type": "string",
+        "description": "Your PowerShades API token. Get one from: Dashboard → Click your name (top right) → My Account → Authorized Applications → 'Get New API Token'. Using an API token is more secure than storing your password.",
+        "x-schema-form": {
+          "type": "password"
+        }
+      },
       "email": {
-        "title": "Email",
+        "title": "Email (if not using API token)",
         "type": "string",
         "format": "email",
-        "description": "Your PowerShades account email address."
+        "description": "Your PowerShades account email address. Only required if not using an API token."
       },
       "password": {
-        "title": "Password",
+        "title": "Password (if not using API token)",
         "type": "string",
-        "description": "Your PowerShades account password.",
+        "description": "Your PowerShades account password. Only required if not using an API token.",
         "x-schema-form": {
           "type": "password"
         }
@@ -66,7 +74,7 @@
         "description": "How long (in seconds) to cache the shade list. Default is 300 seconds (5 minutes)."
       }
     },
-    "required": ["name", "email", "password"]
+    "required": ["name"]
   },
   "layout": [
     {
@@ -75,6 +83,11 @@
       "expandable": false,
       "items": [
         "name",
+        {
+          "type": "help",
+          "helpvalue": "<p><strong>Authentication:</strong> Provide either an <strong>API Token</strong> (recommended) OR your <strong>Email and Password</strong>.</p>"
+        },
+        "apiToken",
         "email",
         "password"
       ]
