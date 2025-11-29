@@ -1,6 +1,6 @@
 {
   "name": "homebridge-powershades",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "PowerShades",
   "description": "Homebridge plugin for PowerShades motorized window coverings",
   "main": "index.js",

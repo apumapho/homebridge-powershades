@@ -80,6 +80,7 @@ class PowerShadesPlatform {
     let accessory = this.accessories.get(uuid);
     if (accessory) {
       this.log.info("[PowerShades] Updating existing shade accessory:", shade.name);
+      accessory.displayName = shade.name;
       accessory.context.shade = shade;
       this.api.updatePlatformAccessories([accessory]);
     } else {
@@ -93,6 +94,9 @@ class PowerShadesPlatform {
     const service =
       accessory.getService(this.api.hap.Service.WindowCovering) ||
       accessory.addService(this.api.hap.Service.WindowCovering, shade.name || "PowerShade");
+
+    // Update service name to match current shade name
+    service.setCharacteristic(this.api.hap.Characteristic.Name, shade.name);
 
     // Handlers
     service
