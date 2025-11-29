@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Test data
+api_dump.json
+*.json~
+
+# Environment variables
+.env
+
+# macOS
+.DS_Store
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+.nyc_output/

@@ -1,0 +1,39 @@
+{
+  "name": "homebridge-powershades",
+  "version": "0.1.0",
+  "displayName": "PowerShades",
+  "description": "Homebridge plugin for PowerShades motorized window coverings",
+  "main": "index.js",
+  "keywords": [
+    "homebridge-plugin",
+    "powershades",
+    "window-covering",
+    "blinds",
+    "shades",
+    "motorized"
+  ],
+  "author": "Alex Schmelkin",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apumapho/homebridge-powershades.git"
+  },
+  "bugs": {
+    "url": "https://github.com/apumapho/homebridge-powershades/issues"
+  },
+  "homepage": "https://github.com/apumapho/homebridge-powershades#readme",
+  "engines": {
+    "node": ">=18.0.0",
+    "homebridge": ">=1.6.0"
+  },
+  "license": "MIT",
+  "homebridge": {
+    "displayName": "PowerShades",
+    "pluginType": "platform",
+    "config": "config.schema.json",
+    "platforms": [
+      {
+        "platform": "PowerShades"
+      }
+    ]
+  }
+}
