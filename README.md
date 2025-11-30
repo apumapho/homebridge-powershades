@@ -33,11 +33,34 @@ Configure the plugin through the Homebridge Config UI X interface, or manually e
 
 ### Authentication
 
-You can authenticate using **either** an API token (recommended) or your email/password:
+You can authenticate using **either** your email/password (recommended) or an API token:
 
-**Option 1: API Token (Recommended)**
+**Option 1: Email and Password (Recommended)**
 
-More secure - doesn't store your password. Get your API token from the PowerShades dashboard:
+Use your PowerShades account credentials for reliable authentication.
+
+```json
+{
+  "platforms": [
+    {
+      "platform": "PowerShades",
+      "name": "PowerShades",
+      "email": "your@email.com",
+      "password": "your-password",
+      "pollInterval": 10,
+      "fastPollInterval": 1,
+      "fastPollDuration": 30,
+      "shadeListCacheTTL": 300
+    }
+  ]
+}
+```
+
+**Option 2: API Token (Deprecated - Unstable)**
+
+> ⚠️ **Note:** API tokens are unstable and periodically deleted from dashboard.powershades.com (as of November 2025). Email/password authentication is strongly recommended.
+
+Get your API token from the PowerShades dashboard if you still wish to use it:
 1. Go to [PowerShades Dashboard](https://dashboard.powershades.com)
 2. Click your name (top right)
 3. Click "My Account"
@@ -59,32 +82,13 @@ More secure - doesn't store your password. Get your API token from the PowerShad
 }
 ```
 
-**Option 2: Email and Password**
-
-```json
-{
-  "platforms": [
-    {
-      "platform": "PowerShades",
-      "name": "PowerShades",
-      "email": "your@email.com",
-      "password": "your-password",
-      "pollInterval": 10,
-      "fastPollInterval": 1,
-      "fastPollDuration": 30,
-      "shadeListCacheTTL": 300
-    }
-  ]
-}
-```
-
 ### Configuration Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `apiToken` | *optional* | Your PowerShades API token (recommended) |
-| `email` | *optional* | Your PowerShades account email (if not using apiToken) |
-| `password` | *optional* | Your PowerShades account password (if not using apiToken) |
+| `email` | *optional* | Your PowerShades account email (recommended) |
+| `password` | *optional* | Your PowerShades account password (recommended) |
+| `apiToken` | *optional* | Your PowerShades API token (deprecated - unstable, periodically deleted from dashboard) |
 | `pollInterval` | `10` | Polling interval in seconds when idle (2-60) |
 | `fastPollInterval` | `1` | Polling interval in seconds after activity (1-5) |
 | `fastPollDuration` | `30` | How long to use fast polling after activity (5-120) |

@@ -10,6 +10,7 @@
 
 ## Known Limitations / Needs Testing
 - **Multi-Property Support**: Not tested with accounts that have multiple properties in PowerShades dashboard. Currently uses account token and returns all shades the API provides. May need property selection in config.
+- **API Key Authentication**: API keys are unstable and periodically deleted from dashboard.powershades.com (as of November 2025). Email/password authentication is recommended.
 
 ## Future Enhancements (Optional)
 - Custom plugin icon (requires building custom UI server)
