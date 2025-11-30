@@ -1,6 +1,7 @@
 # homebridge-powershades
 
 [![npm version](https://badge.fury.io/js/homebridge-powershades.svg)](https://badge.fury.io/js/homebridge-powershades)
+[![npm downloads](https://img.shields.io/npm/dt/homebridge-powershades.svg)](https://www.npmjs.com/package/homebridge-powershades)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A [Homebridge](https://homebridge.io) plugin for [PowerShades](https://powershades.com) motorized window coverings. Control your PowerShades shades through Apple HomeKit.
