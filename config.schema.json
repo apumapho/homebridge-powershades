@@ -47,7 +47,10 @@
         "default": 10,
         "minimum": 2,
         "maximum": 60,
-        "description": "How often (in seconds) to check shade status when idle. Default is 10 seconds."
+        "description": "How often (in seconds) to check shade status when idle. Default is 10 seconds.",
+        "x-schema-form": {
+          "type": "number"
+        }
       },
       "fastPollInterval": {
         "title": "Active Polling Interval",
@@ -55,7 +58,10 @@
         "default": 1,
         "minimum": 1,
         "maximum": 5,
-        "description": "How often (in seconds) to check shade status after controlling a shade. Default is 1 second for instant feedback."
+        "description": "How often (in seconds) to check shade status after controlling a shade. Default is 1 second for instant feedback.",
+        "x-schema-form": {
+          "type": "number"
+        }
       },
       "fastPollDuration": {
         "title": "Active Polling Duration",
@@ -63,7 +69,10 @@
         "default": 30,
         "minimum": 5,
         "maximum": 120,
-        "description": "How long (in seconds) to use fast polling after activity before returning to idle interval. Default is 30 seconds."
+        "description": "How long (in seconds) to use fast polling after activity before returning to idle interval. Default is 30 seconds.",
+        "x-schema-form": {
+          "type": "number"
+        }
       },
       "shadeListCacheTTL": {
         "title": "Shade List Cache Duration",
@@ -71,7 +80,43 @@
         "default": 300,
         "minimum": 60,
         "maximum": 3600,
-        "description": "How long (in seconds) to cache the shade list. Default is 300 seconds (5 minutes)."
+        "description": "How long (in seconds) to cache the shade list. Default is 300 seconds (5 minutes).",
+        "x-schema-form": {
+          "type": "number"
+        }
+      },
+      "maxAuthFailures": {
+        "title": "Max Auth Failures Before Backoff",
+        "type": "integer",
+        "default": 3,
+        "minimum": 1,
+        "maximum": 10,
+        "description": "Number of consecutive authentication failures before entering backoff mode. Default is 3.",
+        "x-schema-form": {
+          "type": "number"
+        }
+      },
+      "authFailureBackoffMs": {
+        "title": "Initial Auth Backoff (milliseconds)",
+        "type": "integer",
+        "default": 60000,
+        "minimum": 10000,
+        "maximum": 600000,
+        "description": "Initial backoff duration after max auth failures (in milliseconds). Doubles with each subsequent failure. Default is 60000ms (1 minute).",
+        "x-schema-form": {
+          "type": "number"
+        }
+      },
+      "maxBackoffMs": {
+        "title": "Max Auth Backoff (milliseconds)",
+        "type": "integer",
+        "default": 3600000,
+        "minimum": 60000,
+        "maximum": 86400000,
+        "description": "Maximum backoff duration (in milliseconds). Default is 3600000ms (1 hour).",
+        "x-schema-form": {
+          "type": "number"
+        }
       }
     },
     "required": ["name"]
@@ -109,7 +154,14 @@
         "pollInterval",
         "fastPollInterval",
         "fastPollDuration",
-        "shadeListCacheTTL"
+        "shadeListCacheTTL",
+        {
+          "type": "help",
+          "helpvalue": "<h5>Authentication Failure Backoff</h5><p>To prevent API hammering when authentication fails (e.g., expired credentials), the plugin uses exponential backoff:</p><ul><li><strong>Max Auth Failures:</strong> Number of failures before backing off</li><li><strong>Initial Backoff:</strong> Starting wait time that doubles with each failure</li><li><strong>Max Backoff:</strong> Maximum wait time between retry attempts</li></ul>"
+        },
+        "maxAuthFailures",
+        "authFailureBackoffMs",
+        "maxBackoffMs"
       ]
     },
     {

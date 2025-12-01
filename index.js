@@ -40,6 +40,9 @@ class PowerShadesPlatform {
       apiToken: this.apiToken,
       baseUrl: this.baseUrl,
       logger: this.log,
+      maxAuthFailures: this.config.maxAuthFailures,
+      authFailureBackoffMs: this.config.authFailureBackoffMs,
+      maxBackoffMs: this.config.maxBackoffMs,
     });
 
     if (this.api) {

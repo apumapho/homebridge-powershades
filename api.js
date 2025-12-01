@@ -23,7 +23,16 @@ const httpAgent = new http.Agent({
 class PowerShadesApiError extends Error {}
 
 class PowerShadesApi {
-  constructor({ email, password, apiToken, baseUrl = DEFAULT_BASE, logger = console }) {
+  constructor({
+    email,
+    password,
+    apiToken,
+    baseUrl = DEFAULT_BASE,
+    logger = console,
+    maxAuthFailures = 3,
+    authFailureBackoffMs = 60000,
+    maxBackoffMs = 3600000
+  }) {
     this.email = email;
     this.password = password;
     this.apiToken = apiToken;
@@ -32,6 +41,13 @@ class PowerShadesApi {
     this.accessToken = apiToken || null; // Use API token directly if provided
     this.refreshToken = null;
     this.activeBase = null;
+
+    // Auth failure tracking for circuit breaker
+    this.consecutiveAuthFailures = 0;
+    this.maxAuthFailures = maxAuthFailures;
+    this.authFailureBackoffMs = authFailureBackoffMs;
+    this.maxBackoffMs = maxBackoffMs;
+    this.nextAuthRetryTime = 0;
 
     // Log authentication method
     if (this.apiToken) {
@@ -42,9 +58,17 @@ class PowerShadesApi {
   }
 
   async login() {
+    // Check if we're in backoff period
+    const now = Date.now();
+    if (now < this.nextAuthRetryTime) {
+      const waitSeconds = Math.ceil((this.nextAuthRetryTime - now) / 1000);
+      throw new PowerShadesApiError(`Auth in backoff, retry in ${waitSeconds}s`);
+    }
+
     // If using API token, skip login and set active base
     if (this.apiToken) {
       this.activeBase = this.baseCandidates[0];
+      this.consecutiveAuthFailures = 0; // Reset on successful API token usage
       return { token: this.apiToken };
     }
 
@@ -62,12 +86,18 @@ class PowerShadesApi {
         if (!this.accessToken) {
           throw new PowerShadesApiError("No access token returned");
         }
+        // Reset failure tracking on successful login
+        this.consecutiveAuthFailures = 0;
+        this.nextAuthRetryTime = 0;
         return data;
       } catch (err) {
         lastError = err;
         continue;
       }
     }
+
+    // Track login failure
+    this.handleAuthFailure();
     throw new PowerShadesApiError(`Login failed: ${lastError}`);
   }
 
@@ -75,11 +105,48 @@ class PowerShadesApi {
     if (!this.refreshToken) {
       throw new PowerShadesApiError("Missing refresh token");
     }
-    const data = await this.request("post", "/auth/jwt/refresh/", {
-      json: { refresh: this.refreshToken },
-      useAuth: false,
-    });
-    this.accessToken = data.access || data.token || this.accessToken;
+
+    try {
+      const data = await this.request("post", "/auth/jwt/refresh/", {
+        json: { refresh: this.refreshToken },
+        useAuth: false,
+      });
+      this.accessToken = data.access || data.token || this.accessToken;
+      // Reset failure tracking on successful refresh
+      this.consecutiveAuthFailures = 0;
+      this.nextAuthRetryTime = 0;
+    } catch (err) {
+      // Refresh failed - clear tokens and try re-login next time
+      this.logger.warn?.("[PowerShades] Token refresh failed, clearing auth state");
+      this.accessToken = this.apiToken || null; // Reset to API token if available
+      this.refreshToken = null;
+      this.handleAuthFailure();
+      throw err;
+    }
+  }
+
+  handleAuthFailure() {
+    this.consecutiveAuthFailures++;
+
+    if (this.consecutiveAuthFailures >= this.maxAuthFailures) {
+      // Calculate exponential backoff
+      const backoffMultiplier = Math.pow(2, this.consecutiveAuthFailures - this.maxAuthFailures);
+      const backoffMs = Math.min(
+        this.authFailureBackoffMs * backoffMultiplier,
+        this.maxBackoffMs
+      );
+      this.nextAuthRetryTime = Date.now() + backoffMs;
+
+      const backoffMinutes = Math.ceil(backoffMs / 60000);
+      this.logger.error?.(
+        `[PowerShades] Too many auth failures (${this.consecutiveAuthFailures}). ` +
+        `Backing off for ${backoffMinutes} minute(s). Check your credentials.`
+      );
+    } else {
+      this.logger.warn?.(
+        `[PowerShades] Auth failure ${this.consecutiveAuthFailures}/${this.maxAuthFailures}`
+      );
+    }
   }
 
   async getShades() {
@@ -142,10 +209,36 @@ class PowerShadesApi {
       agent,
     });
 
-    if (res.status === 401 && useAuth && retryOn401 && this.refreshToken) {
-      await this.refreshTokens();
-      mergedHeaders["Authorization"] = `Bearer ${this.accessToken}`;
-      return this.requestWithBase(baseUrl, method, path, { json, headers: mergedHeaders, useAuth, retryOn401: false });
+    // Handle 401 with token refresh (only if using email/password auth)
+    if (res.status === 401 && useAuth && retryOn401) {
+      if (this.refreshToken) {
+        // Try to refresh tokens
+        try {
+          await this.refreshTokens();
+          mergedHeaders["Authorization"] = `Bearer ${this.accessToken}`;
+          return this.requestWithBase(baseUrl, method, path, { json, headers: mergedHeaders, useAuth, retryOn401: false });
+        } catch (refreshErr) {
+          // Refresh failed, error already logged and backoff set
+          throw new PowerShadesApiError(`API error ${res.status} on ${path}: Token refresh failed`);
+        }
+      } else if (!this.apiToken) {
+        // No refresh token and not using API token - try re-login
+        this.logger.info?.("[PowerShades] No refresh token, attempting re-login");
+        this.accessToken = null;
+        try {
+          await this.login();
+          mergedHeaders["Authorization"] = `Bearer ${this.accessToken}`;
+          return this.requestWithBase(baseUrl, method, path, { json, headers: mergedHeaders, useAuth, retryOn401: false });
+        } catch (loginErr) {
+          // Login failed, error already logged and backoff set
+          throw new PowerShadesApiError(`API error ${res.status} on ${path}: Re-login failed`);
+        }
+      } else {
+        // Using API token that got 401 - this is a permanent failure
+        this.handleAuthFailure();
+        const text = await res.text();
+        throw new PowerShadesApiError(`API error ${res.status} on ${path}: ${text}`);
+      }
     }
 
     if (!res.ok) {
