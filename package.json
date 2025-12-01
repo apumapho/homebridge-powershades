@@ -34,6 +34,10 @@
     "homebridge": ">=1.6.0"
   },
   "license": "MIT",
+  "scripts": {
+    "test": "node --test __tests__/*.test.js",
+    "test:watch": "node --test --watch __tests__/*.test.js"
+  },
   "peerDependencies": {
     "homebridge": "^1.6.0 || ^2.0.0-beta"
   },
