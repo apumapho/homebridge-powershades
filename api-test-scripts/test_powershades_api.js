@@ -1,29 +1,14 @@
 #!/usr/bin/env node
-// Minimal API smoke test for PowerShades. Uses .env (POWERSHADES_USERNAME/POWERSHADES_PASSWORD).
+// Minimal API smoke test for PowerShades.
 
 const { PowerShadesApi } = require("../api");
-const fs = require("fs");
-const path = require("path");
-
-function loadEnv() {
-  const envPath = path.join(process.cwd(), ".env");
-  if (!fs.existsSync(envPath)) return;
-  for (const line of fs.readFileSync(envPath, "utf-8").split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
-    const [key, ...rest] = trimmed.split("=");
-    const value = rest.join("=").trim().replace(/^['"]|['"]$/g, "");
-    process.env[key.trim()] ??= value;
-  }
-}
 
 async function main() {
-  loadEnv();
   const email = process.env.POWERSHADES_USERNAME;
   const password = process.env.POWERSHADES_PASSWORD;
   const baseUrl = process.env.POWERSHADES_BASE_URL;
   if (!email || !password) {
-    console.error("Set POWERSHADES_USERNAME and POWERSHADES_PASSWORD in the environment or .env");
+    console.error("Set POWERSHADES_USERNAME and POWERSHADES_PASSWORD environment variables");
     process.exit(1);
   }
 

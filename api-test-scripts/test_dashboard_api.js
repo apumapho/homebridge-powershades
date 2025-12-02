@@ -2,20 +2,6 @@
 // Test dashboard API for PowerShades
 
 const https = require('https');
-const fs = require('fs');
-const path = require('path');
-
-function loadEnv() {
-  const envPath = path.join(process.cwd(), ".env");
-  if (!fs.existsSync(envPath)) return;
-  for (const line of fs.readFileSync(envPath, "utf-8").split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
-    const [key, ...rest] = trimmed.split("=");
-    const value = rest.join("=").trim().replace(/^['"]|['"]$/g, "");
-    process.env[key.trim()] ??= value;
-  }
-}
 
 const httpsAgent = new https.Agent({ keepAlive: true });
 
@@ -111,11 +97,10 @@ async function testDashboardApi(apiToken, propertyId, shadeId) {
 }
 
 async function main() {
-  loadEnv();
   const apiToken = process.env.POWERSHADES_API_TOKEN;
 
   if (!apiToken) {
-    console.error("Set POWERSHADES_API_TOKEN in .env");
+    console.error("Set POWERSHADES_API_TOKEN environment variable");
     process.exit(1);
   }
 

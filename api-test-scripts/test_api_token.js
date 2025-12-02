@@ -3,20 +3,6 @@
 
 const https = require('https');
 const http = require('http');
-const fs = require('fs');
-const path = require('path');
-
-function loadEnv() {
-  const envPath = path.join(process.cwd(), ".env");
-  if (!fs.existsSync(envPath)) return;
-  for (const line of fs.readFileSync(envPath, "utf-8").split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
-    const [key, ...rest] = trimmed.split("=");
-    const value = rest.join("=").trim().replace(/^['"]|['"]$/g, "");
-    process.env[key.trim()] ??= value;
-  }
-}
 
 const httpsAgent = new https.Agent({ keepAlive: true });
 const httpAgent = new http.Agent({ keepAlive: true });
@@ -139,12 +125,11 @@ async function testApiToken(apiToken, baseUrl = "https://api.powershades.com") {
 }
 
 async function main() {
-  loadEnv();
   const apiToken = process.env.POWERSHADES_API_TOKEN;
   const baseUrl = process.env.POWERSHADES_BASE_URL;
 
   if (!apiToken) {
-    console.error("Set POWERSHADES_API_TOKEN in the environment or .env file");
+    console.error("Set POWERSHADES_API_TOKEN environment variable");
     console.error("Get your API token from the PowerShades dashboard");
     process.exit(1);
   }
