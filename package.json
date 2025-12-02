@@ -1,6 +1,6 @@
 {
   "name": "homebridge-powershades",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "displayName": "PowerShades",
   "description": "Homebridge plugin for PowerShades motorized window shades and blinds. Control your PowerShades smart window coverings through Apple HomeKit with automated polling and cloud API integration.",
   "main": "index.js",

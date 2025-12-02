@@ -361,4 +361,371 @@ describe('PowerShadesApi - Authentication and Backoff', () => {
       );
     });
   });
+
+  describe('API Response Parsing', () => {
+    test('should parse getShades with results array format', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [{ id: 1, name: 'Shade 1' }, { id: 2, name: 'Shade 2' }] }),
+      });
+
+      const shades = await api.getShades();
+      assert.deepStrictEqual(shades, [{ id: 1, name: 'Shade 1' }, { id: 2, name: 'Shade 2' }]);
+    });
+
+    test('should parse getShades with direct array format', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => [{ id: 1, name: 'Shade 1' }, { id: 2, name: 'Shade 2' }],
+      });
+
+      const shades = await api.getShades();
+      assert.deepStrictEqual(shades, [{ id: 1, name: 'Shade 1' }, { id: 2, name: 'Shade 2' }]);
+    });
+
+    test('should return empty array when getShades response is invalid', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      });
+
+      const shades = await api.getShades();
+      assert.deepStrictEqual(shades, []);
+    });
+
+    test('should parse getScenes with results array format', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [{ id: 1, name: 'Morning' }] }),
+      });
+
+      const scenes = await api.getScenes();
+      assert.deepStrictEqual(scenes, [{ id: 1, name: 'Morning' }]);
+    });
+
+    test('should parse getSchedules with direct array format', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => [{ id: 1, time: '08:00' }],
+      });
+
+      const schedules = await api.getSchedules();
+      assert.deepStrictEqual(schedules, [{ id: 1, time: '08:00' }]);
+    });
+
+    test('should parse getShadeAttributes correctly', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [{ id: 1, battery: 85 }] }),
+      });
+
+      const attributes = await api.getShadeAttributes();
+      assert.deepStrictEqual(attributes, [{ id: 1, battery: 85 }]);
+    });
+  });
+
+  describe('Base URL Fallback Logic', () => {
+    test('should dedupe /api suffix in baseUrl', () => {
+      const api1 = new PowerShadesApi({
+        apiToken: 'test',
+        baseUrl: 'https://api.powershades.com',
+        logger: mockLogger,
+      });
+
+      const api2 = new PowerShadesApi({
+        apiToken: 'test',
+        baseUrl: 'https://api.powershades.com/api',
+        logger: mockLogger,
+      });
+
+      // Both should have the same candidates
+      assert.strictEqual(api1.baseCandidates.length, 2);
+      assert.strictEqual(api2.baseCandidates.length, 2);
+    });
+
+    test('should try multiple base URLs on login failure', async () => {
+      const api = new PowerShadesApi({
+        email: 'test@example.com',
+        password: 'password123',
+        baseUrl: 'https://api.powershades.com',
+        logger: mockLogger,
+      });
+
+      // First base URL fails
+      mockFetch({ ok: false, status: 404, text: async () => 'Not Found' });
+
+      // Second base URL succeeds
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ access: 'token', refresh: 'refresh' })
+      });
+
+      await api.login();
+      assert.strictEqual(api.accessToken, 'token');
+      assert.strictEqual(fetchCalls.length, 2); // Tried both URLs
+    });
+
+    test('should fail after trying all base URLs', async () => {
+      const api = new PowerShadesApi({
+        email: 'test@example.com',
+        password: 'password123',
+        baseUrl: 'https://api.powershades.com',
+        logger: mockLogger,
+      });
+
+      // Both base URLs fail
+      mockFetch({ ok: false, status: 404, text: async () => 'Not Found' });
+      mockFetch({ ok: false, status: 404, text: async () => 'Not Found' });
+
+      await assert.rejects(
+        api.login(),
+        (err) => err.message.includes('Login failed')
+      );
+      assert.strictEqual(fetchCalls.length, 2); // Tried both URLs
+    });
+
+    test('should set activeBase on successful login', async () => {
+      const api = new PowerShadesApi({
+        email: 'test@example.com',
+        password: 'password123',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ access: 'token', refresh: 'refresh' })
+      });
+
+      await api.login();
+      assert.ok(api.activeBase, 'activeBase should be set');
+      assert.ok(api.activeBase.startsWith('https://'), 'activeBase should be a URL');
+    });
+  });
+
+  describe('Different Response Types', () => {
+    test('should handle 204 No Content responses', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 204,
+      });
+
+      const result = await api.moveShade('Test Shade', 50);
+      assert.strictEqual(result, null);
+    });
+
+    test('should handle empty response body correctly', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => null,
+      });
+
+      const shades = await api.getShades();
+      assert.deepStrictEqual(shades, []);
+    });
+
+    test('should handle response with no results property', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ count: 0, data: [] }),
+      });
+
+      const shades = await api.getShades();
+      assert.deepStrictEqual(shades, []);
+    });
+  });
+
+  describe('Critical API Methods', () => {
+    test('moveShade should send correct payload', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true }),
+      });
+
+      await api.moveShade('Living Room', 75);
+
+      // Verify the request was made with correct data
+      assert.strictEqual(fetchCalls.length, 1);
+      const [url, options] = fetchCalls[0];
+      assert.ok(url.includes('/shades/move/'));
+
+      // Parse the request body
+      const body = JSON.parse(options.body);
+      assert.strictEqual(body.shade_name, 'Living Room');
+      assert.strictEqual(body.percentage, 75);
+    });
+
+    test('moveShade should handle API errors', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: false,
+        status: 400,
+        text: async () => 'Shade not found',
+      });
+
+      await assert.rejects(
+        api.moveShade('NonExistent', 50),
+        (err) => err.message.includes('API error 400')
+      );
+    });
+
+    test('getScenes should call correct endpoint', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => [{ id: 1, name: 'Morning' }],
+      });
+
+      await api.getScenes();
+
+      assert.strictEqual(fetchCalls.length, 1);
+      const [url] = fetchCalls[0];
+      assert.ok(url.includes('/scenes/'));
+    });
+
+    test('getSchedules should call correct endpoint', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [] }),
+      });
+
+      await api.getSchedules();
+
+      assert.strictEqual(fetchCalls.length, 1);
+      const [url] = fetchCalls[0];
+      assert.ok(url.includes('/schedules/'));
+    });
+
+    test('getShadeAttributes should call correct endpoint', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => [{ id: 1, battery: 90 }],
+      });
+
+      await api.getShadeAttributes();
+
+      assert.strictEqual(fetchCalls.length, 1);
+      const [url] = fetchCalls[0];
+      assert.ok(url.includes('/shadeattributes/'));
+    });
+
+    test('should include Authorization header in API calls', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'my_secret_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => [],
+      });
+
+      await api.getShades();
+
+      const [, options] = fetchCalls[0];
+      assert.ok(options.headers.Authorization);
+      assert.strictEqual(options.headers.Authorization, 'Bearer my_secret_token');
+    });
+
+    test('should use correct HTTP agent based on protocol', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        baseUrl: 'https://api.powershades.com',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => [],
+      });
+
+      await api.getShades();
+
+      const [, options] = fetchCalls[0];
+      assert.ok(options.agent, 'Should include HTTP agent');
+    });
+  });
 });
