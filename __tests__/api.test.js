@@ -728,4 +728,133 @@ describe('PowerShadesApi - Authentication and Backoff', () => {
       assert.ok(options.agent, 'Should include HTTP agent');
     });
   });
+
+  describe('Group API Methods', () => {
+    test('getGroups should call correct endpoint', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => [
+          { id: 1, name: 'Living Room', shades: [1, 2, 3] },
+          { id: 2, name: 'Bedroom', shades: [4, 5] },
+        ],
+      });
+
+      const groups = await api.getGroups();
+
+      assert.strictEqual(fetchCalls.length, 1);
+      const [url] = fetchCalls[0];
+      assert.ok(url.includes('/groups/'));
+      assert.strictEqual(groups.length, 2);
+      assert.strictEqual(groups[0].name, 'Living Room');
+    });
+
+    test('getGroups should handle results array format', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          results: [{ id: 1, name: 'Test Group', shades: [] }],
+        }),
+      });
+
+      const groups = await api.getGroups();
+      assert.strictEqual(groups.length, 1);
+    });
+
+    test('getGroups should return empty array on null response', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => null,
+      });
+
+      const groups = await api.getGroups();
+      assert.deepStrictEqual(groups, []);
+    });
+
+    test('moveGroup should send correct payload', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true }),
+      });
+
+      await api.moveGroup(123, 75);
+
+      assert.strictEqual(fetchCalls.length, 1);
+      const [url, options] = fetchCalls[0];
+      assert.ok(url.includes('/groups/123/move/'));
+
+      const body = JSON.parse(options.body);
+      assert.strictEqual(body.percentage, 75);
+    });
+
+    test('moveGroup should handle API errors', async () => {
+      const api = new PowerShadesApi({
+        apiToken: 'test_token',
+        logger: mockLogger,
+      });
+
+      mockFetch({
+        ok: false,
+        status: 404,
+        text: async () => 'Group not found',
+      });
+
+      await assert.rejects(
+        api.moveGroup(999, 50),
+        (err) => err.message.includes('API error 404')
+      );
+    });
+
+    test('moveGroup should require authentication', async () => {
+      const api = new PowerShadesApi({
+        email: 'test@example.com',
+        password: 'password123',
+        logger: mockLogger,
+      });
+
+      // Mock login
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ access: 'token123', refresh: 'refresh123' }),
+      });
+
+      // Mock moveGroup
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true }),
+      });
+
+      await api.moveGroup(123, 50);
+
+      // Should have made login call + moveGroup call
+      assert.strictEqual(fetchCalls.length, 2);
+      const [, moveOptions] = fetchCalls[1];
+      assert.ok(moveOptions.headers.Authorization);
+    });
+  });
 });

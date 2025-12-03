@@ -169,6 +169,12 @@ class PowerShadesApi {
     });
   }
 
+  async moveGroup(groupId, percentage) {
+    return this.request("post", `/groups/${groupId}/move/`, {
+      json: { percentage },
+    });
+  }
+
   async getScenes() {
     const data = await this.request("get", "/scenes/");
     if (Array.isArray(data)) return data;
@@ -178,6 +184,13 @@ class PowerShadesApi {
 
   async getSchedules() {
     const data = await this.request("get", "/schedules/");
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
+  }
+
+  async getGroups() {
+    const data = await this.request("get", "/groups/");
     if (Array.isArray(data)) return data;
     if (data && Array.isArray(data.results)) return data.results;
     return [];

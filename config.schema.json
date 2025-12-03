@@ -117,6 +117,16 @@
         "x-schema-form": {
           "type": "number"
         }
+      },
+      "exposeGroups": {
+        "title": "Expose Shade Groups",
+        "type": "array",
+        "items": {
+          "type": "string",
+          "title": "Group Name"
+        },
+        "default": [],
+        "description": "List of shade group names to expose to HomeKit. Enter exact group names from your PowerShades dashboard (e.g., 'Living Room Front', 'Living Room Side')."
       }
     },
     "required": ["name"]
@@ -166,13 +176,23 @@
     },
     {
       "type": "section",
-      "title": "Performance Notes",
+      "title": "Shade Groups",
       "expandable": true,
       "expanded": false,
       "items": [
         {
           "type": "help",
-          "helpvalue": "<ul><li><strong>HTTP Keep-Alive:</strong> Enabled automatically for 20-30% faster API calls</li><li><strong>Shade List Caching:</strong> Reduces unnecessary API calls during polling</li><li><strong>Adaptive Polling:</strong> Fast updates after activity, slower when idle</li></ul>"
+          "helpvalue": "<h5>What are Shade Groups?</h5><p>Shade groups let you control multiple shades at once. Create groups in your PowerShades dashboard, then add them here to expose them to HomeKit.</p><p><strong>Example:</strong> If you have 8 shades in your Living Room, you can create 'Living Room Front' and 'Living Room Side' groups in the PowerShades dashboard. Then add those exact group names here.</p><p><strong>Note:</strong> Room-level groups (like 'Living Room') are already controllable in Apple Home's room interface, so you typically only need to expose sub-groups here.</p>"
+        },
+        {
+          "key": "exposeGroups",
+          "type": "array",
+          "title": "Shade Groups to Expose",
+          "items": {
+            "type": "string",
+            "title": "Group Name",
+            "placeholder": "e.g., Living Room Front"
+          }
         }
       ]
     }

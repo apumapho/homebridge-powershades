@@ -25,6 +25,9 @@ class PowerShadesPlatform {
     this.shadeListCache = [];
     this.shadeListCacheTime = 0;
     this.shadeListCacheTTL = (Number(this.config.shadeListCacheTTL) || 300) * 1000;
+    this.groupListCache = [];
+    this.groupListCacheTime = 0;
+    this.exposeGroups = this.config.exposeGroups || [];
     this.lastActivityTime = 0;
     this.pollTimer = null;
 
@@ -46,9 +49,11 @@ class PowerShadesPlatform {
     });
 
     if (this.api) {
-      this.api.on("didFinishLaunching", () => {
+      this.api.on("didFinishLaunching", async () => {
         this.log.info("[PowerShades] Homebridge launch finished; discovering shades...");
-        this.discoverShades();
+        await this.discoverShades();
+        await this.discoverGroups();
+        await this.cleanupStaleAccessories();
         this.startPolling();
       });
     }
@@ -79,6 +84,131 @@ class PowerShadesPlatform {
     } catch (err) {
       this.log.error("[PowerShades] Failed to fetch shades:", err.message || err);
     }
+  }
+
+  async getCachedGroups(forceRefresh = false) {
+    const now = Date.now();
+    if (forceRefresh || !this.groupListCache.length || (now - this.groupListCacheTime) > this.shadeListCacheTTL) {
+      this.groupListCache = await this.psApi.getGroups();
+      this.groupListCacheTime = now;
+      this.log.debug(`[PowerShades] Refreshed group list cache (${this.groupListCache.length} groups)`);
+    }
+    return this.groupListCache;
+  }
+
+  async discoverGroups() {
+    try {
+      const groups = await this.getCachedGroups(true);
+
+      // Log all available groups for easy config setup
+      if (groups.length > 0) {
+        const groupNames = groups.map(g => g.name).join(', ');
+        this.log.info(`[PowerShades] Available groups: ${groupNames}`);
+      }
+
+      if (!this.exposeGroups || this.exposeGroups.length === 0) {
+        this.log.info("[PowerShades] No groups configured to expose (use 'exposeGroups' in config)");
+        return;
+      }
+
+      const exposedGroups = groups.filter(g => this.exposeGroups.includes(g.name));
+      this.log.info(`[PowerShades] Exposing ${exposedGroups.length} groups: ${exposedGroups.map(g => g.name).join(', ')}`);
+
+      for (const group of exposedGroups) {
+        this.registerGroupAccessory(group);
+      }
+    } catch (err) {
+      this.log.error("[PowerShades] Failed to fetch groups:", err.message || err);
+    }
+  }
+
+  async cleanupStaleAccessories() {
+    try {
+      // Build set of valid UUIDs for current shades and groups
+      const validUUIDs = new Set();
+
+      // Add UUIDs for all current shades
+      const shades = await this.getCachedShades(false);
+      for (const shade of shades) {
+        const uuid = this.api.hap.uuid.generate(`powershades-shade-${shade.id || shade.name}`);
+        validUUIDs.add(uuid);
+      }
+
+      // Add UUIDs for exposed groups
+      if (this.exposeGroups && this.exposeGroups.length > 0) {
+        const groups = await this.getCachedGroups(false);
+        const exposedGroups = groups.filter(g => this.exposeGroups.includes(g.name));
+        for (const group of exposedGroups) {
+          const uuid = this.api.hap.uuid.generate(`powershades-group-${group.id}`);
+          validUUIDs.add(uuid);
+        }
+      }
+
+      // Remove accessories that are no longer valid
+      const staleAccessories = [];
+      for (const [uuid, accessory] of this.accessories.entries()) {
+        if (!validUUIDs.has(uuid)) {
+          staleAccessories.push(accessory);
+          this.accessories.delete(uuid);
+        }
+      }
+
+      if (staleAccessories.length > 0) {
+        this.log.info(`[PowerShades] Removing ${staleAccessories.length} stale accessories: ${staleAccessories.map(a => a.displayName).join(', ')}`);
+        this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, staleAccessories);
+      }
+    } catch (err) {
+      this.log.error("[PowerShades] Failed to clean up stale accessories:", err.message || err);
+    }
+  }
+
+  registerGroupAccessory(group) {
+    const uuid = this.api.hap.uuid.generate(`powershades-group-${group.id}`);
+    let accessory = this.accessories.get(uuid);
+    if (accessory) {
+      this.log.info("[PowerShades] Updating existing group accessory:", group.name);
+      accessory.displayName = group.name;
+      accessory.context.group = group;
+      this.api.updatePlatformAccessories([accessory]);
+    } else {
+      this.log.info("[PowerShades] Adding new group accessory:", group.name);
+      accessory = new this.api.platformAccessory(group.name || "PowerShades Group", uuid);
+      accessory.context.group = group;
+      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+      this.accessories.set(uuid, accessory);
+    }
+
+    // Update AccessoryInformation service name
+    const infoService = accessory.getService(this.api.hap.Service.AccessoryInformation);
+    if (infoService) {
+      infoService.setCharacteristic(this.api.hap.Characteristic.Name, group.name);
+    }
+
+    const service =
+      accessory.getService(this.api.hap.Service.WindowCovering) ||
+      accessory.addService(this.api.hap.Service.WindowCovering, group.name || "PowerShades Group");
+
+    // Update service name
+    service.setCharacteristic(this.api.hap.Characteristic.Name, group.name);
+
+    // Handlers for groups
+    service
+      .getCharacteristic(this.api.hap.Characteristic.TargetPosition)
+      .onSet((value) => this.handleSetGroupTargetPosition(group, value));
+
+    service
+      .getCharacteristic(this.api.hap.Characteristic.CurrentPosition)
+      .onGet(() => this.handleGetGroupCurrentPosition(accessory));
+
+    service
+      .getCharacteristic(this.api.hap.Characteristic.PositionState)
+      .onGet(() => this.handleGetPositionState(accessory));
+
+    // Initialize positions (use average of shades in group)
+    const current = this.getGroupAveragePosition(group);
+    service.updateCharacteristic(this.api.hap.Characteristic.CurrentPosition, current);
+    service.updateCharacteristic(this.api.hap.Characteristic.TargetPosition, current);
+    service.updateCharacteristic(this.api.hap.Characteristic.PositionState, this.api.hap.Characteristic.PositionState.STOPPED);
   }
 
   registerShadeAccessory(shade) {
@@ -154,6 +284,37 @@ class PowerShadesPlatform {
     return this.api.hap.Characteristic.PositionState.STOPPED;
   }
 
+  async handleSetGroupTargetPosition(group, value) {
+    const target = clampPosition(value);
+    this.log.info(`[PowerShades] Setting group "${group.name}" to ${target}%`);
+    try {
+      await this.psApi.moveGroup(group.id, target);
+      // Trigger fast polling after user activity
+      this.lastActivityTime = Date.now();
+      this.restartPolling();
+    } catch (err) {
+      this.log.error("[PowerShades] Group move failed:", err.message || err);
+      throw err;
+    }
+  }
+
+  handleGetGroupCurrentPosition(accessory) {
+    const group = accessory.context.group;
+    return this.getGroupAveragePosition(group);
+  }
+
+  getGroupAveragePosition(group) {
+    if (!group.shades || group.shades.length === 0) return 0;
+
+    const shadePositions = group.shades.map(shadeId => {
+      const shade = this.shadeListCache.find(s => s.id === shadeId);
+      return shade ? normalizePosition(shade) : 0;
+    });
+
+    const sum = shadePositions.reduce((acc, pos) => acc + pos, 0);
+    return Math.round(sum / shadePositions.length);
+  }
+
   getCurrentPollInterval() {
     const timeSinceActivity = (Date.now() - this.lastActivityTime) / 1000;
     if (timeSinceActivity < this.fastPollDuration) {
@@ -190,6 +351,23 @@ class PowerShadesPlatform {
         service.updateCharacteristic(this.api.hap.Characteristic.CurrentPosition, pos);
         service.updateCharacteristic(this.api.hap.Characteristic.TargetPosition, pos);
         service.updateCharacteristic(this.api.hap.Characteristic.PositionState, this.api.hap.Characteristic.PositionState.STOPPED);
+      }
+
+      // Poll groups
+      if (this.exposeGroups && this.exposeGroups.length > 0) {
+        const groups = await this.getCachedGroups(false);
+        for (const group of groups) {
+          if (!this.exposeGroups.includes(group.name)) continue;
+          const uuid = this.api.hap.uuid.generate(`powershades-group-${group.id}`);
+          const accessory = this.accessories.get(uuid);
+          if (!accessory) continue;
+          accessory.context.group = group;
+          const service = accessory.getService(this.api.hap.Service.WindowCovering);
+          const pos = this.getGroupAveragePosition(group);
+          service.updateCharacteristic(this.api.hap.Characteristic.CurrentPosition, pos);
+          service.updateCharacteristic(this.api.hap.Characteristic.TargetPosition, pos);
+          service.updateCharacteristic(this.api.hap.Characteristic.PositionState, this.api.hap.Characteristic.PositionState.STOPPED);
+        }
       }
     } catch (err) {
       this.log.error("[PowerShades] Poll failed:", err.message || err);
