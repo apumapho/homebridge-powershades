@@ -1,5 +1,6 @@
 # homebridge-powershades
 
+[![verified-by-homebridge](https://img.shields.io/badge/homebridge-verified-blueviolet?color=%23491F59&style=flat)](https://github.com/homebridge/homebridge/wiki/Verified-Plugins)
 [![npm version](https://badge.fury.io/js/homebridge-powershades.svg)](https://badge.fury.io/js/homebridge-powershades)
 [![npm downloads](https://img.shields.io/npm/dt/homebridge-powershades.svg)](https://www.npmjs.com/package/homebridge-powershades)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
