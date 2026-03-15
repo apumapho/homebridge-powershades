@@ -331,7 +331,19 @@ class PowerShadesPlatform {
   }
 
   schedulePoll() {
-    const interval = this.getCurrentPollInterval();
+    let interval = this.getCurrentPollInterval();
+
+    // If the API is in auth backoff, don't poll every 10 seconds — wait for backoff to expire.
+    // This prevents thousands of useless "Auth in backoff" log entries and allows the retry
+    // to happen promptly when the backoff window opens.
+    if (this.psApi && this.psApi.isInBackoff()) {
+      const backoffRemaining = Math.ceil((this.psApi.nextAuthRetryTime - Date.now()) / 1000);
+      if (backoffRemaining > interval) {
+        interval = backoffRemaining + 1; // Poll 1 second after backoff expires
+        this.log.debug?.(`[PowerShades] Auth in backoff, next poll in ${backoffRemaining}s`);
+      }
+    }
+
     this.pollTimer = setTimeout(async () => {
       await this.pollShades();
       this.schedulePoll();

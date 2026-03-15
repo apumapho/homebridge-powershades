@@ -48,6 +48,9 @@ class PowerShadesApi {
     this.authFailureBackoffMs = authFailureBackoffMs;
     this.maxBackoffMs = maxBackoffMs;
     this.nextAuthRetryTime = 0;
+    this.lastAuthFailureTime = 0;
+    // After this duration of continuous backoff, force a full reset
+    this.maxTotalBackoffMs = maxBackoffMs * 6; // 6 hours by default
 
     // Log authentication method
     if (this.apiToken) {
@@ -57,12 +60,26 @@ class PowerShadesApi {
     }
   }
 
+  isInBackoff() {
+    return Date.now() < this.nextAuthRetryTime;
+  }
+
   async login() {
     // Check if we're in backoff period
     const now = Date.now();
     if (now < this.nextAuthRetryTime) {
-      const waitSeconds = Math.ceil((this.nextAuthRetryTime - now) / 1000);
-      throw new PowerShadesApiError(`Auth in backoff, retry in ${waitSeconds}s`);
+      // Force reset if we've been in backoff too long (prevents permanent stuck state)
+      if (this.lastAuthFailureTime > 0 && (now - this.lastAuthFailureTime) > this.maxTotalBackoffMs) {
+        this.logger.warn?.(
+          `[PowerShades] Auth backoff exceeded ${Math.ceil(this.maxTotalBackoffMs / 3600000)}h total. Forcing recovery attempt.`
+        );
+        this.consecutiveAuthFailures = 0;
+        this.nextAuthRetryTime = 0;
+        this.lastAuthFailureTime = 0;
+      } else {
+        const waitSeconds = Math.ceil((this.nextAuthRetryTime - now) / 1000);
+        throw new PowerShadesApiError(`Auth in backoff, retry in ${waitSeconds}s`);
+      }
     }
 
     // If using API token, skip login and set active base
@@ -74,6 +91,7 @@ class PowerShadesApi {
 
     // Otherwise, use email/password authentication
     let lastError;
+    let sawAuthError = false;
     for (const base of this.baseCandidates) {
       try {
         const data = await this.requestWithBase(base, "post", "/auth/jwt/", {
@@ -89,15 +107,28 @@ class PowerShadesApi {
         // Reset failure tracking on successful login
         this.consecutiveAuthFailures = 0;
         this.nextAuthRetryTime = 0;
+        this.lastAuthFailureTime = 0;
         return data;
       } catch (err) {
         lastError = err;
+        // Track whether any error was a definite auth rejection (not network/server)
+        if (err.message && /API error (401|403)/.test(err.message)) {
+          sawAuthError = true;
+        }
         continue;
       }
     }
 
-    // Track login failure
-    this.handleAuthFailure();
+    // Only count as auth failure if server actually rejected credentials.
+    // Network errors and server errors (500, 502, timeout) should NOT
+    // trigger auth backoff — they are transient and unrelated to credentials.
+    if (sawAuthError) {
+      this.handleAuthFailure();
+    } else {
+      this.logger.warn?.(
+        `[PowerShades] Login failed due to network/server error (not counting as auth failure): ${lastError?.message || lastError}`
+      );
+    }
     throw new PowerShadesApiError(`Login failed: ${lastError}`);
   }
 
@@ -115,6 +146,7 @@ class PowerShadesApi {
       // Reset failure tracking on successful refresh
       this.consecutiveAuthFailures = 0;
       this.nextAuthRetryTime = 0;
+      this.lastAuthFailureTime = 0;
     } catch (err) {
       // Refresh failed - clear tokens and try re-login next time
       this.logger.warn?.("[PowerShades] Token refresh failed, clearing auth state");
@@ -127,6 +159,7 @@ class PowerShadesApi {
 
   handleAuthFailure() {
     this.consecutiveAuthFailures++;
+    this.lastAuthFailureTime = Date.now();
 
     if (this.consecutiveAuthFailures >= this.maxAuthFailures) {
       // Calculate exponential backoff
@@ -231,13 +264,17 @@ class PowerShadesApi {
           mergedHeaders["Authorization"] = `Bearer ${this.accessToken}`;
           return this.requestWithBase(baseUrl, method, path, { json, headers: mergedHeaders, useAuth, retryOn401: false });
         } catch (refreshErr) {
-          // Refresh failed, error already logged and backoff set
-          throw new PowerShadesApiError(`API error ${res.status} on ${path}: Token refresh failed`);
+          // Refresh failed — fall through to re-login below
         }
-      } else if (!this.apiToken) {
-        // No refresh token and not using API token - try re-login
-        this.logger.info?.("[PowerShades] No refresh token, attempting re-login");
+      }
+
+      if (!this.refreshToken && !this.apiToken) {
+        // No refresh token (missing or cleared by failed refresh) and not using API token — try re-login
+        this.logger.info?.("[PowerShades] Attempting re-login");
         this.accessToken = null;
+        // Reset auth failure count so re-login isn't blocked by backoff from refresh failure
+        this.consecutiveAuthFailures = 0;
+        this.nextAuthRetryTime = 0;
         try {
           await this.login();
           mergedHeaders["Authorization"] = `Bearer ${this.accessToken}`;
@@ -246,7 +283,7 @@ class PowerShadesApi {
           // Login failed, error already logged and backoff set
           throw new PowerShadesApiError(`API error ${res.status} on ${path}: Re-login failed`);
         }
-      } else {
+      } else if (this.apiToken) {
         // Using API token that got 401 - this is a permanent failure
         this.handleAuthFailure();
         const text = await res.text();

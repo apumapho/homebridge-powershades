@@ -235,6 +235,75 @@ describe('PowerShadesApi - Authentication and Backoff', () => {
       assert.ok(backoff <= 300000); // Should be capped at 5 minutes
     });
 
+    test('should force recovery after maxTotalBackoffMs exceeded', async () => {
+      const warnCalls = [];
+      const api = new PowerShadesApi({
+        email: 'test@example.com',
+        password: 'password123',
+        logger: {
+          ...mockLogger,
+          warn: (msg) => warnCalls.push(msg),
+        },
+        maxAuthFailures: 1,
+        authFailureBackoffMs: 60000,
+        maxBackoffMs: 3600000,
+      });
+
+      // Simulate being stuck in backoff for a long time
+      api.consecutiveAuthFailures = 50;
+      api.nextAuthRetryTime = Date.now() + 3600000; // 1 hour from now
+      api.lastAuthFailureTime = Date.now() - (3600000 * 7); // 7 hours ago (exceeds 6h default)
+
+      // Mock successful login after forced recovery
+      mockFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ access: 'recovered_token', refresh: 'refresh' }),
+      });
+
+      await api.login();
+      assert.strictEqual(api.accessToken, 'recovered_token');
+      assert.strictEqual(api.consecutiveAuthFailures, 0);
+      assert.ok(warnCalls.some(m => m.includes('Forcing recovery attempt')));
+    });
+
+    test('should NOT force recovery before maxTotalBackoffMs', async () => {
+      const api = new PowerShadesApi({
+        email: 'test@example.com',
+        password: 'password123',
+        logger: mockLogger,
+        maxAuthFailures: 1,
+        authFailureBackoffMs: 60000,
+        maxBackoffMs: 3600000,
+      });
+
+      // Simulate being in backoff but not long enough for forced recovery
+      api.consecutiveAuthFailures = 5;
+      api.nextAuthRetryTime = Date.now() + 3600000;
+      api.lastAuthFailureTime = Date.now() - 3600000; // Only 1 hour ago (< 6h default)
+
+      await assert.rejects(
+        api.login(),
+        (err) => err.message.includes('Auth in backoff')
+      );
+    });
+
+    test('isInBackoff should report backoff state', () => {
+      const api = new PowerShadesApi({
+        email: 'test@example.com',
+        password: 'password123',
+        logger: mockLogger,
+      });
+
+      assert.strictEqual(api.isInBackoff(), false);
+
+      api.nextAuthRetryTime = Date.now() + 60000;
+      assert.strictEqual(api.isInBackoff(), true);
+
+      api.nextAuthRetryTime = Date.now() - 1000;
+      assert.strictEqual(api.isInBackoff(), false);
+    });
+
     test('should reset failure counter on successful auth', async () => {
       const api = new PowerShadesApi({
         email: 'test@example.com',
@@ -310,6 +379,36 @@ describe('PowerShadesApi - Authentication and Backoff', () => {
       assert.strictEqual(fetchCalls.length, 4); // login + 401 + refresh + retry
     });
 
+    test('should fall back to re-login when token refresh fails', async () => {
+      const infoCalls = [];
+      const api = new PowerShadesApi({
+        email: 'test@example.com',
+        password: 'password123',
+        logger: {
+          ...mockLogger,
+          info: (msg) => infoCalls.push(msg),
+        },
+      });
+
+      // Mock successful login
+      mockFetch({ ok: true, status: 200, json: async () => ({ access: 'initial_token', refresh: 'refresh_token' }) });
+      await api.login();
+
+      // Mock: 401 on request, failed refresh (401), successful re-login, successful retry
+      mockFetch({ ok: false, status: 401, text: async () => 'Token expired' });
+      mockFetch({ ok: false, status: 401, text: async () => 'Refresh token invalid' });
+      mockFetch({ ok: true, status: 200, json: async () => ({ access: 'relogin_token', refresh: 'new_refresh' }) });
+      mockFetch({ ok: true, status: 200, json: async () => ({ results: [{ id: 1, name: 'Shade 1' }] }) });
+
+      const shades = await api.getShades();
+      assert.deepStrictEqual(shades, [{ id: 1, name: 'Shade 1' }]);
+      // login + 401 + failed refresh + re-login + retry
+      assert.strictEqual(fetchCalls.length, 5);
+      assert.ok(infoCalls.some(m => m.includes('Attempting re-login')));
+      // Auth failures should be reset after successful re-login
+      assert.strictEqual(api.consecutiveAuthFailures, 0);
+    });
+
     test('should not retry more than once', async () => {
       const api = new PowerShadesApi({
         email: 'test@example.com',
@@ -359,6 +458,56 @@ describe('PowerShadesApi - Authentication and Backoff', () => {
         api.login(),
         (err) => err.message.includes('Network error') || err.message.includes('Login failed')
       );
+    });
+
+    test('should NOT count network errors as auth failures', async () => {
+      const api = new PowerShadesApi({
+        email: 'test@example.com',
+        password: 'password123',
+        logger: mockLogger,
+        maxAuthFailures: 1,
+      });
+
+      // Network error on both base candidates
+      mockFetch(new Error('ECONNREFUSED'));
+      mockFetch(new Error('ECONNREFUSED'));
+
+      await assert.rejects(api.login());
+      assert.strictEqual(api.consecutiveAuthFailures, 0, 'Network errors should not increment auth failure counter');
+      assert.strictEqual(api.nextAuthRetryTime, 0, 'Network errors should not trigger backoff');
+    });
+
+    test('should count 401 responses as auth failures', async () => {
+      const api = new PowerShadesApi({
+        email: 'test@example.com',
+        password: 'password123',
+        logger: mockLogger,
+        maxAuthFailures: 1,
+      });
+
+      // 401 on both base candidates
+      mockFetch({ ok: false, status: 401, text: async () => 'Invalid credentials' });
+      mockFetch({ ok: false, status: 401, text: async () => 'Invalid credentials' });
+
+      await assert.rejects(api.login());
+      assert.strictEqual(api.consecutiveAuthFailures, 1, '401 should increment auth failure counter');
+      assert.ok(api.nextAuthRetryTime > Date.now(), '401 should trigger backoff');
+    });
+
+    test('should NOT count 500 errors as auth failures', async () => {
+      const api = new PowerShadesApi({
+        email: 'test@example.com',
+        password: 'password123',
+        logger: mockLogger,
+        maxAuthFailures: 1,
+      });
+
+      // 500 on both base candidates
+      mockFetch({ ok: false, status: 500, text: async () => 'Internal Server Error' });
+      mockFetch({ ok: false, status: 500, text: async () => 'Internal Server Error' });
+
+      await assert.rejects(api.login());
+      assert.strictEqual(api.consecutiveAuthFailures, 0, 'Server errors should not increment auth failure counter');
     });
   });
 
