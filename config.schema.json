@@ -13,6 +13,22 @@
         "default": "PowerShades",
         "description": "The name that will appear in your Homebridge log."
       },
+      "controlMode": {
+        "title": "Control Mode",
+        "type": "string",
+        "default": "cloud",
+        "oneOf": [
+          {
+            "title": "Cloud API",
+            "enum": ["cloud"]
+          },
+          {
+            "title": "Local RF Gateway (UDP, recommended)",
+            "enum": ["local-udp"]
+          }
+        ],
+        "description": "Choose whether shades are controlled through the PowerShades cloud API or the local RF Gateway V2 UDP protocol."
+      },
       "email": {
         "title": "Email (Recommended)",
         "type": "string",
@@ -40,6 +56,155 @@
         "type": "string",
         "placeholder": "https://api.powershades.com",
         "description": "Custom API endpoint (leave blank for default)."
+      },
+      "localRequestTimeoutMs": {
+        "title": "Local Gateway Request Timeout",
+        "type": "integer",
+        "default": 5000,
+        "minimum": 1000,
+        "maximum": 30000,
+        "description": "Timeout for local RF gateway status HTTP requests in milliseconds.",
+        "x-schema-form": {
+          "type": "number"
+        }
+      },
+      "localStatusCacheTTL": {
+        "title": "Local Status Cache Duration",
+        "type": "integer",
+        "default": 30,
+        "minimum": 5,
+        "maximum": 300,
+        "description": "How long, in seconds, to cache local gateway percent/battery/RSSI state between polls.",
+        "x-schema-form": {
+          "type": "number"
+        }
+      },
+      "localGateways": {
+        "title": "Local RF Gateways",
+        "type": "array",
+        "default": [],
+        "description": "Local RF Gateway V2 devices used when Control Mode is Local RF Gateway. Local UDP mode can discover named or linked channels automatically; shade entries are optional overrides.",
+        "items": {
+          "type": "object",
+          "title": "Gateway",
+          "properties": {
+            "host": {
+              "title": "Gateway Host",
+              "type": "string",
+              "placeholder": "192.168.1.50",
+              "description": "Local IP address or hostname for the RF Gateway V2."
+            },
+            "serial": {
+              "title": "Gateway Serial",
+              "type": "string",
+              "description": "Optional gateway serial number, used only for stable internal IDs and logging."
+            },
+            "localAddress": {
+              "title": "Local Source Address",
+              "type": "string",
+              "description": "Optional local source IP address for hosts with multiple LAN interfaces."
+            },
+            "discoverChannels": {
+              "title": "Discover Channels",
+              "type": "boolean",
+              "default": true,
+              "description": "Automatically expose channels with a non-default gateway name or linked RF device. Recommended for Local UDP mode."
+            },
+            "includeChannels": {
+              "title": "Include Channels",
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "default": [],
+              "description": "Optional channel numbers to expose even if discovery does not find a custom name or linked RF device."
+            },
+            "excludeChannels": {
+              "title": "Exclude Channels",
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30
+              },
+              "default": [],
+              "description": "Optional channel numbers to hide from HomeKit."
+            },
+            "udpPort": {
+              "title": "UDP Port",
+              "type": "integer",
+              "default": 42,
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "PowerShades Config.NET local UDP port. Leave at 42 unless you are testing through a relay."
+            },
+            "localUdpPort": {
+              "title": "Local UDP Source Port",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "Optional local UDP source port. Leave blank for the operating system default."
+            },
+            "udpTimeoutMs": {
+              "title": "UDP Response Timeout",
+              "type": "integer",
+              "default": 1200,
+              "minimum": 250,
+              "maximum": 10000,
+              "description": "How long to wait for the gateway to echo a UDP command packet."
+            },
+            "waitForUdpResponse": {
+              "title": "Wait for UDP Echo",
+              "type": "boolean",
+              "default": true,
+              "description": "Wait for the gateway to echo each UDP command before reporting success. Leave enabled unless your network drops UDP replies."
+            },
+            "shades": {
+              "title": "Shades",
+              "type": "array",
+              "default": [],
+              "description": "Optional per-channel overrides. Use this to rename a discovered shade, include an otherwise hidden channel, exclude a problem channel, or provide an initial fallback position.",
+              "items": {
+                "type": "object",
+                "title": "Shade",
+                "properties": {
+                  "name": {
+                    "title": "Shade Name",
+                    "type": "string",
+                    "description": "HomeKit shade name."
+                  },
+                  "channel": {
+                    "title": "RF Channel",
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 30,
+                    "description": "RF channel number on the local gateway."
+                  },
+                  "assumePosition": {
+                    "title": "Assumed Position",
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Fallback current position used before local feedback is available. 0 is open; 100 is closed.",
+                    "x-schema-form": {
+                      "type": "number"
+                    }
+                  },
+                  "enabled": {
+                    "title": "Enabled",
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Set false to hide this channel from HomeKit."
+                  }
+                },
+                "required": ["channel"]
+              }
+            }
+          },
+          "required": ["host"]
+        }
       },
       "pollInterval": {
         "title": "Idle Polling Interval",
@@ -126,7 +291,7 @@
           "title": "Group Name"
         },
         "default": [],
-        "description": "List of shade group names to expose to HomeKit. Enter exact group names from your PowerShades dashboard (e.g., 'Living Room Front', 'Living Room Side')."
+        "description": "List of shade group names to expose to HomeKit. Enter exact group names from your PowerShades dashboard (e.g., 'Kitchen Windows', 'Dining Windows')."
       }
     },
     "required": ["name"]
@@ -138,13 +303,29 @@
       "expandable": false,
       "items": [
         "name",
+        "controlMode",
         {
           "type": "help",
-          "helpvalue": "<p><strong>Authentication:</strong> Provide your <strong>Email and Password</strong> (recommended) OR an <strong>API Token</strong> (deprecated - unstable).</p><p>⚠️ <strong>Note:</strong> API tokens are unstable and periodically deleted from dashboard.powershades.com (as of Nov 2025). Email/password authentication is strongly recommended.</p>"
+          "helpvalue": "<p><strong>Cloud mode:</strong> Provide your <strong>Email and Password</strong> (recommended) OR an <strong>API Token</strong> (deprecated - unstable).</p><p><strong>Local UDP mode:</strong> Configure one or more local RF Gateway V2 hosts. The plugin discovers named or linked RF channels and sends native local percentage commands. Cloud credentials are not required.</p><p>API tokens are unstable and periodically deleted from dashboard.powershades.com (as of Nov 2025). Email/password authentication is strongly recommended for cloud mode.</p>"
         },
         "email",
         "password",
         "apiToken"
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Local RF Gateway Control",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        {
+          "type": "help",
+          "helpvalue": "<h5>Local Control</h5><p>Local UDP mode uses the same local protocol as PowerShades Config.NET on UDP port 42 and supports native 0-100% position commands. Enter the gateway host and the plugin will discover channels with custom gateway names or linked RF device IDs.</p><p>Use shade overrides only when you need to rename, include, exclude, or provide fallback settings for a channel. Gateway status values may be partial: battery value 0 and percent value -1 mean unknown, not real values.</p>"
+        },
+        "localGateways",
+        "localRequestTimeoutMs",
+        "localStatusCacheTTL"
       ]
     },
     {
@@ -182,7 +363,7 @@
       "items": [
         {
           "type": "help",
-          "helpvalue": "<h5>What are Shade Groups?</h5><p>Shade groups let you control multiple shades at once. Create groups in your PowerShades dashboard, then add them here to expose them to HomeKit.</p><p><strong>Example:</strong> If you have 8 shades in your Living Room, you can create 'Living Room Front' and 'Living Room Side' groups in the PowerShades dashboard. Then add those exact group names here.</p><p><strong>Note:</strong> Room-level groups (like 'Living Room') are already controllable in Apple Home's room interface, so you typically only need to expose sub-groups here.</p>"
+          "helpvalue": "<h5>What are Shade Groups?</h5><p>Shade groups let you control multiple shades at once. Create groups in your PowerShades dashboard, then add them here to expose them to HomeKit.</p><p><strong>Example:</strong> If you have 8 shades in your Main Floor, you can create 'Kitchen Windows' and 'Dining Windows' groups in the PowerShades dashboard. Then add those exact group names here.</p><p><strong>Note:</strong> Room-level groups (like 'Main Floor') are already controllable in Apple Home's room interface, so you typically only need to expose sub-groups here.</p>"
         },
         {
           "key": "exposeGroups",
@@ -191,7 +372,7 @@
           "items": {
             "type": "string",
             "title": "Group Name",
-            "placeholder": "e.g., Living Room Front"
+            "placeholder": "e.g., Kitchen Windows"
           }
         }
       ]

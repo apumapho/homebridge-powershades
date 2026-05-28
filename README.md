@@ -9,11 +9,11 @@ A [Homebridge](https://homebridge.io) plugin for [PowerShades](https://powershad
 
 ## Features
 
-- 🚀 **Fast & Responsive**: HTTP keep-alive connections for 20-30% faster API calls
-- 💾 **Smart Caching**: Reduces unnecessary API calls with intelligent shade list caching
-- 📊 **Adaptive Polling**: 1-second polling when active, 10-second when idle
-- 🎨 **Easy Configuration**: Custom UI for easy setup through Homebridge Config UI X
-- 🏠 **Full HomeKit Integration**: Control shades via Siri, Home app, and automations
+- Cloud control through the PowerShades API with email/password authentication.
+- Local RF Gateway V2 control through the same UDP protocol used by PowerShades Config.NET.
+- Automatic local channel discovery from gateway names, RF device IDs, and feedback status.
+- Adaptive polling with faster updates after user activity.
+- Full HomeKit `WindowCovering` integration for Siri, Home app, scenes, and automations.
 
 ## Installation
 
@@ -84,13 +84,92 @@ Get your API token from the PowerShades dashboard if you still wish to use it:
 }
 ```
 
+### Local RF Gateway Mode
+
+Local mode is opt-in and does not require PowerShades cloud credentials. The
+recommended local mode is `local-udp`, which uses the RF Gateway V2 local UDP
+protocol on port 42. This is the same local protocol used by PowerShades
+Config.NET and supports native 0-100% position commands.
+
+At minimum, configure the local gateway host. The plugin discovers channels that
+have a non-default gateway name or a linked RF device ID.
+
+```json
+{
+  "platforms": [
+    {
+      "platform": "PowerShades",
+      "name": "PowerShades",
+      "controlMode": "local-udp",
+      "pollInterval": 30,
+      "localGateways": [
+        {
+          "host": "192.168.1.50"
+        }
+      ]
+    }
+  ]
+}
+```
+
+You can add optional shade overrides when you need stable custom names, explicit
+channel inclusion, or exclusions:
+
+```json
+{
+  "platforms": [
+    {
+      "platform": "PowerShades",
+      "name": "PowerShades",
+      "controlMode": "local-udp",
+      "localGateways": [
+        {
+          "host": "192.168.1.50",
+          "shades": [
+            {
+              "name": "Kitchen Window",
+              "channel": 5
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Use `includeChannels` to expose a channel even if the gateway still names it
+`Channel N`. Use `excludeChannels` or a shade override with `"enabled": false`
+to hide a channel from HomeKit.
+
+Use `localAddress` on a gateway only if the Homebridge host has multiple LAN
+addresses and needs to bind outbound gateway requests to a specific source IP.
+If your network blocks UDP replies from the gateway, set `waitForUdpResponse`
+to `false` on that gateway after verifying commands still reach the shades.
+
+#### Discovering Local Channels
+
+From a checkout of this repository, you can inspect a gateway before editing
+your Homebridge config:
+
+```bash
+npm run local:udp -- discover --host 192.168.1.50
+```
+
+The command prints discovered channels, current feedback values, and a suggested
+`localGateways` config block.
+
 ### Configuration Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
+| `controlMode` | `cloud` | `cloud` or `local-udp` for native local RF Gateway V2 percentage control |
 | `email` | *optional* | Your PowerShades account email (recommended) |
 | `password` | *optional* | Your PowerShades account password (recommended) |
 | `apiToken` | *optional* | Your PowerShades API token (deprecated - unstable, periodically deleted from dashboard) |
+| `localGateways` | `[]` | Local RF Gateway V2 hosts, discovery settings, and optional shade overrides |
+| `localRequestTimeoutMs` | `5000` | Timeout for local gateway status HTTP requests |
+| `localStatusCacheTTL` | `30` | Local gateway status cache duration in seconds |
 | `pollInterval` | `10` | Polling interval in seconds when idle (2-60) |
 | `fastPollInterval` | `1` | Polling interval in seconds after activity (1-5) |
 | `fastPollDuration` | `30` | How long to use fast polling after activity (5-120) |
@@ -99,12 +178,19 @@ Get your API token from the PowerShades dashboard if you still wish to use it:
 
 ## How It Works
 
-The plugin:
+In cloud mode, the plugin:
 1. Logs into your PowerShades cloud account
 2. Discovers all shades configured in your account
 3. Exposes each shade as a HomeKit `WindowCovering` accessory
 4. Polls the cloud API to sync shade positions
 5. Uses adaptive polling for responsive updates after user actions
+
+In `local-udp` mode, the plugin:
+1. Uses configured local RF Gateway V2 hosts and RF channels
+2. Discovers channels from gateway `chnames`, `rfdevs`, and status values
+3. Sends native UDP set-position commands for 0-100% targets
+4. Reads local gateway `percent`, `battery`, `rx`, and `rfdevs` status values
+5. Uses optimistic state when a shade accepts commands but does not report feedback
 
 ## Performance Optimizations
 
@@ -115,24 +201,30 @@ The plugin:
 
 ## Supported Features
 
-✅ Open/Close shades
-✅ Set specific position (0-100%)
-✅ Current position feedback
-✅ Multiple shades
-✅ Optimistic updates
+- Open and close shades
+- Set specific position from 0-100%
+- Current position feedback when the gateway reports it
+- Multiple RF gateways
+- Automatic local discovery in `local-udp` mode
+- Optimistic updates for shades without local feedback
 
-❌ Stop command (not supported by API)
-❌ Local RF control (see [RF-PROTOCOL.md](RF-PROTOCOL.md))
+Not supported:
+
+- Cloud stop command. The public cloud API does not expose a direct stop command.
+- Shade groups in local mode.
 
 ## Known Limitations
 
 - **Multi-Property Accounts**: The plugin has not been tested with accounts that have multiple properties configured in the PowerShades dashboard. It currently uses the account token and displays whatever shades the API returns. If you have multiple properties and encounter issues, please [open an issue](https://github.com/apumapho/homebridge-powershades/issues).
+- **Local feedback gaps**: Some RF channels may accept movement commands but report `percent=-1`, `battery=0`, or `rfdevs=0`. The plugin keeps optimistic state for those channels after successful commands.
 
 ## Development
 
 ### Testing
 
-See [tests/README.md](tests/README.md) for development testing instructions.
+```bash
+npm test
+```
 
 ### Local Development
 
@@ -156,9 +248,15 @@ homebridge -D
 ### Shades not appearing in HomeKit
 
 1. Check Homebridge logs for errors
-2. Verify your PowerShades credentials are correct
-3. Ensure your shades are configured in the PowerShades app
+2. In cloud mode, verify your PowerShades credentials are correct
+3. In local UDP mode, verify Homebridge can reach each RF Gateway V2 host
 4. Try restarting Homebridge
+
+For local discovery, run:
+
+```bash
+npm run local:udp -- discover --host 192.168.1.50
+```
 
 ### Slow response times
 
@@ -174,7 +272,7 @@ homebridge -D
 
 ## About PowerShades
 
-[PowerShades](https://powershades.com) manufactures battery-powered motorized window shades with RF control and cloud connectivity. This plugin uses the PowerShades cloud API to integrate with HomeKit.
+[PowerShades](https://powershades.com) manufactures battery-powered motorized window shades with RF control and cloud connectivity. This plugin integrates PowerShades with HomeKit through the PowerShades cloud API or local RF Gateway V2 UDP control.
 
 ## License
 
@@ -188,14 +286,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 - Thanks to the [Homebridge](https://homebridge.io) team for the excellent platform
 - Thanks to PowerShades for providing a cloud API
-- Thanks to [Claude Code](https://claude.com/claude-code) for the vibe code assist
 
 ## Support
 
-- 🐛 [Report Issues](https://github.com/apumapho/homebridge-powershades/issues)
-- 💬 [Homebridge Discord](https://discord.gg/homebridge)
-- 📖 [Homebridge Wiki](https://github.com/homebridge/homebridge/wiki)
-
----
-
-Made with ❤️ for the Homebridge community
+- [Report Issues](https://github.com/apumapho/homebridge-powershades/issues)
+- [Homebridge Discord](https://discord.gg/homebridge)
+- [Homebridge Wiki](https://github.com/homebridge/homebridge/wiki)

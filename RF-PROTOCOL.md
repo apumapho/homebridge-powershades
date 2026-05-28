@@ -1,7 +1,9 @@
 # PowerShades RF Gateway Protocol Analysis
 
 ## Summary
-After reverse engineering the PowerShades RF gateway, we discovered that **percentage control is NOT available via local HTTP commands**. The gateway only exposes basic commands (`up`, `down`, `stop`) through its local web interface. Percentage commands come exclusively from the PowerShades cloud server.
+After reverse engineering the PowerShades RF gateway, we discovered that **percentage control is not available through the gateway web commands**. The gateway's HTTP interface only exposes basic commands (`up`, `down`, `stop`) through its local web interface.
+
+Update 2026-05-27: PowerShades Config.NET uses a local UDP protocol on port 42 that can send percentage, movement, feedback, and channel-name commands. See `local-udp-protocol.js` and `tools/powershades-local-udp.js`.
 
 ## Gateway Architecture
 - Gateway polls PowerShades cloud via HTTPS every ~13 seconds
@@ -9,7 +11,7 @@ After reverse engineering the PowerShades RF gateway, we discovered that **perce
 - Gateway translates to RF packets at 433.92MHz ± 100KHz
 - Local web UI at `http://gateway-ip/` only supports basic commands
 
-## Available Local HTTP Commands
+## Available Gateway Web Commands
 ```
 http://gateway-ip/ajax.shtml?up=CHANNEL
 http://gateway-ip/ajax.shtml?down=CHANNEL
@@ -20,7 +22,7 @@ http://gateway-ip/ajax.shtml?p2=CHANNEL
 http://gateway-ip/ajax.shtml?reboot=0
 ```
 
-## Percentage Control Discovery
+## HTTP Percentage Control Discovery
 
 ### Debug Output Monitoring
 Gateway has debug endpoint at `http://gateway-ip/debug.shtml` which shows real-time logs via:
@@ -84,17 +86,56 @@ None of these triggered percentage control:
 ```
 
 ## Conclusion
-**Local percentage control via HTTP is not possible** with current firmware. The gateway firmware only accepts percentage commands from the cloud server's `SRV SetPos` protocol.
+**Local percentage control via HTTP is not possible** with current firmware. Local percentage control is possible through the Config.NET UDP protocol on port 42.
+
+## Config.NET Local UDP Protocol
+
+Config.NET sends UDP packets to the gateway on port 42. The common packet layout is:
+
+```
+uint16le payload_length
+uint16le crc16_ccitt_bytes_4_to_end
+uint8    command
+uint8    sequence
+uint16le channel
+...      command payload
+```
+
+The checksum is CRC-16/CCITT with initial value `0`, calculated over bytes 4 through the end of the packet and stored little-endian at bytes 2-3.
+
+Known command bytes:
+
+```
+0x03 up
+0x04 down
+0x05 stop
+0x16 p2
+0x1a set position
+0x21 link feedback
+0x3b rename channel
+```
+
+Examples:
+
+```
+Channel 15 to 50%, sequence 0x66:
+0a 00 51 96 1a 66 0f 00 01 00 32 00 00 00 00 00 00 00
+
+Channel 15 stop, sequence 0x71:
+00 00 43 43 05 71 0f 00
+
+Rename channel 15 to "Bedroom Window", sequence 0x33:
+32 00 58 c9 3b 33 0f 00 4d 61 73 74 65 72 20 57 69 6e 64 6f 77 00 ...
+```
 
 ## Options for Percentage Control
-1. **Cloud API** (current solution) - 300-400ms latency via PowerShades cloud
-2. **RF Hardware** - Would need 433.92MHz transmitter to send raw RF packets
-3. **Firmware Modification** - Risky, requires reverse engineering embedded firmware
+1. **Config.NET UDP protocol** - local port 42 commands implemented by this repo's UDP CLI/library and Homebridge local mode.
+2. **Cloud API** - 300-400ms latency via PowerShades cloud.
+3. **RF Hardware** - would need 433.92MHz transmitter to send raw RF packets.
+4. **Firmware Modification** - risky, requires reverse engineering embedded firmware.
 
 ## Recommendations
-Continue using the optimized cloud API approach with:
-- HTTP keep-alive (20-30% faster API calls)
-- Shade list caching (reduces API calls)
-- Adaptive polling (1s active, 10s idle, 30s transition)
-
-Total response time: ~300-400ms, which is acceptable for smart home automation.
+Use `controlMode: "local-udp"` for Homebridge installations that can reach the
+RF Gateway V2 on the local network. Keep cloud mode available for users who need
+remote cloud discovery or who cannot route UDP port 42 from Homebridge to the
+gateway.

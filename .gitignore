@@ -25,3 +25,11 @@ npm-debug.log*
 # Testing
 coverage/
 .nyc_output/
+
+# Private local notes and hardware mappings
+private-docs/
+utm-windows-autounattend/
+*.pcap
+*.zip
+*.qcow2
+*.iso

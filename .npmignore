@@ -3,6 +3,14 @@ __tests__/
 api-test-scripts/
 *.test.js
 
+# Private and hardware investigation artifacts
+private-docs/
+utm-windows-autounattend/
+*.pcap
+*.zip
+*.qcow2
+*.iso
+
 # Development files
 .git/
 .github/
@@ -35,3 +43,6 @@ coverage/
 # Documentation (keep README.md, but exclude others)
 CONTRIBUTING.md
 CHANGELOG.md
+TODO.md
+RF-PROTOCOL.md
+RF-CHANNEL-MAPPING.example.md

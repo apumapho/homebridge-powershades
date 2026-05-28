@@ -1,6 +1,7 @@
 // Homebridge platform plugin for PowerShades.
 
 const { PowerShadesApi } = require("./api");
+const { LocalPowerShadesApi } = require("./local-api");
 
 const PLUGIN_NAME = "homebridge-powershades";
 const PLATFORM_NAME = "PowerShades";
@@ -22,6 +23,8 @@ class PowerShadesPlatform {
     this.password = this.config.password;
     this.apiToken = this.config.apiToken;
     this.baseUrl = this.config.baseUrl;
+    this.controlMode = normalizeControlMode(this.config.controlMode || this.config.mode || "cloud");
+    this.isLocalMode = this.controlMode === "local-udp";
     this.shadeListCache = [];
     this.shadeListCacheTime = 0;
     this.shadeListCacheTTL = (Number(this.config.shadeListCacheTTL) || 300) * 1000;
@@ -31,28 +34,41 @@ class PowerShadesPlatform {
     this.lastActivityTime = 0;
     this.pollTimer = null;
 
-    // Require either API token OR email+password
-    if (!this.apiToken && (!this.email || !this.password)) {
+    if (this.isLocalMode) {
+      this.psApi = new LocalPowerShadesApi({
+        gateways: this.config.localGateways || this.config.gateways || [],
+        logger: this.log,
+        requestTimeoutMs: this.config.localRequestTimeoutMs,
+        statusCacheTTL: (Number(this.config.localStatusCacheTTL) || 30) * 1000,
+      });
+      if (!this.psApi.gateways.length) {
+        this.log.error("[PowerShades] Local control mode requires at least one configured local gateway");
+        return;
+      }
+    } else if (!this.apiToken && (!this.email || !this.password)) {
+      // Cloud mode requires either API token OR email+password.
       this.log.error("[PowerShades] Missing credentials: provide either 'apiToken' OR 'email' and 'password' in config.json");
       return;
+    } else {
+      this.psApi = new PowerShadesApi({
+        email: this.email,
+        password: this.password,
+        apiToken: this.apiToken,
+        baseUrl: this.baseUrl,
+        logger: this.log,
+        maxAuthFailures: this.config.maxAuthFailures,
+        authFailureBackoffMs: this.config.authFailureBackoffMs,
+        maxBackoffMs: this.config.maxBackoffMs,
+      });
     }
-
-    this.psApi = new PowerShadesApi({
-      email: this.email,
-      password: this.password,
-      apiToken: this.apiToken,
-      baseUrl: this.baseUrl,
-      logger: this.log,
-      maxAuthFailures: this.config.maxAuthFailures,
-      authFailureBackoffMs: this.config.authFailureBackoffMs,
-      maxBackoffMs: this.config.maxBackoffMs,
-    });
 
     if (this.api) {
       this.api.on("didFinishLaunching", async () => {
         this.log.info("[PowerShades] Homebridge launch finished; discovering shades...");
         await this.discoverShades();
-        await this.discoverGroups();
+        if (!this.isLocalMode) {
+          await this.discoverGroups();
+        }
         await this.cleanupStaleAccessories();
         this.startPolling();
       });
@@ -66,7 +82,7 @@ class PowerShadesPlatform {
 
   async getCachedShades(forceRefresh = false) {
     const now = Date.now();
-    if (forceRefresh || !this.shadeListCache.length || (now - this.shadeListCacheTime) > this.shadeListCacheTTL) {
+    if (this.isLocalMode || forceRefresh || !this.shadeListCache.length || (now - this.shadeListCacheTime) > this.shadeListCacheTTL) {
       this.shadeListCache = await this.psApi.getShades();
       this.shadeListCacheTime = now;
       this.log.debug(`[PowerShades] Refreshed shade list cache (${this.shadeListCache.length} shades)`);
@@ -97,6 +113,11 @@ class PowerShadesPlatform {
   }
 
   async discoverGroups() {
+    if (this.isLocalMode) {
+      this.log.info("[PowerShades] Shade groups are not available in local control mode");
+      return;
+    }
+
     try {
       const groups = await this.getCachedGroups(true);
 
@@ -135,7 +156,7 @@ class PowerShadesPlatform {
       }
 
       // Add UUIDs for exposed groups
-      if (this.exposeGroups && this.exposeGroups.length > 0) {
+      if (!this.isLocalMode && this.exposeGroups && this.exposeGroups.length > 0) {
         const groups = await this.getCachedGroups(false);
         const exposedGroups = groups.filter(g => this.exposeGroups.includes(g.name));
         for (const group of exposedGroups) {
@@ -262,9 +283,12 @@ class PowerShadesPlatform {
 
   async handleSetTargetPosition(shade, value) {
     const target = clampPosition(value);
-    this.log.info(`[PowerShades] Setting "${shade.name}" to ${target}%`);
+    const modeLabel = this.controlMode === "local-udp"
+      ? "via local UDP"
+      : "via cloud";
+    this.log.info(`[PowerShades] Setting "${shade.name}" to ${target}% ${modeLabel}`);
     try {
-      await this.psApi.moveShade(shade.name, target);
+      await this.psApi.moveShade(this.isLocalMode ? shade : shade.name, target);
       // Trigger fast polling after user activity
       this.lastActivityTime = Date.now();
       this.restartPolling();
@@ -280,11 +304,24 @@ class PowerShadesPlatform {
   }
 
   handleGetPositionState(accessory) {
+    if (this.isLocalMode && this.psApi?.isShadeMoving) {
+      const shade = accessory.context.shade;
+      if (this.psApi.isShadeMoving(shade)) {
+        const direction = this.psApi.getShadeDirection?.(shade);
+        return direction === "opening"
+          ? this.api.hap.Characteristic.PositionState.DECREASING
+          : this.api.hap.Characteristic.PositionState.INCREASING;
+      }
+    }
     // Without motion telemetry, report STOPPED.
     return this.api.hap.Characteristic.PositionState.STOPPED;
   }
 
   async handleSetGroupTargetPosition(group, value) {
+    if (this.isLocalMode) {
+      throw new Error("Groups are not supported in local control mode");
+    }
+
     const target = clampPosition(value);
     this.log.info(`[PowerShades] Setting group "${group.name}" to ${target}%`);
     try {
@@ -336,7 +373,7 @@ class PowerShadesPlatform {
     // If the API is in auth backoff, don't poll every 10 seconds — wait for backoff to expire.
     // This prevents thousands of useless "Auth in backoff" log entries and allows the retry
     // to happen promptly when the backoff window opens.
-    if (this.psApi && this.psApi.isInBackoff()) {
+    if (this.psApi && this.psApi.isInBackoff && this.psApi.isInBackoff()) {
       const backoffRemaining = Math.ceil((this.psApi.nextAuthRetryTime - Date.now()) / 1000);
       if (backoffRemaining > interval) {
         interval = backoffRemaining + 1; // Poll 1 second after backoff expires
@@ -360,13 +397,14 @@ class PowerShadesPlatform {
         accessory.context.shade = shade;
         const service = accessory.getService(this.api.hap.Service.WindowCovering);
         const pos = normalizePosition(shade);
+        const target = this.isLocalMode ? normalizeTargetPosition(shade) : pos;
         service.updateCharacteristic(this.api.hap.Characteristic.CurrentPosition, pos);
-        service.updateCharacteristic(this.api.hap.Characteristic.TargetPosition, pos);
-        service.updateCharacteristic(this.api.hap.Characteristic.PositionState, this.api.hap.Characteristic.PositionState.STOPPED);
+        service.updateCharacteristic(this.api.hap.Characteristic.TargetPosition, target);
+        service.updateCharacteristic(this.api.hap.Characteristic.PositionState, this.handleGetPositionState(accessory));
       }
 
       // Poll groups
-      if (this.exposeGroups && this.exposeGroups.length > 0) {
+      if (!this.isLocalMode && this.exposeGroups && this.exposeGroups.length > 0) {
         const groups = await this.getCachedGroups(false);
         for (const group of groups) {
           if (!this.exposeGroups.includes(group.name)) continue;
@@ -403,9 +441,23 @@ function normalizePosition(shade) {
   return clampPosition(num);
 }
 
+function normalizeTargetPosition(shade) {
+  const val = shade?.target_position ?? normalizePosition(shade);
+  const num = Number(val);
+  if (Number.isNaN(num)) return normalizePosition(shade);
+  return clampPosition(num);
+}
+
 function clampPosition(value) {
   return Math.max(0, Math.min(100, Number(value)));
 }
 
+function normalizeControlMode(value) {
+  const mode = String(value || "cloud").toLowerCase();
+  if (mode === "local-udp" || mode === "udp" || mode === "local") return "local-udp";
+  return "cloud";
+}
+
 module.exports.PLUGIN_NAME = PLUGIN_NAME;
 module.exports.PLATFORM_NAME = PLATFORM_NAME;
+module.exports.normalizeControlMode = normalizeControlMode;
