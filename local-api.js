@@ -7,6 +7,14 @@ const {
   buildSetPositionPacket,
   sendUdpPacket,
 } = require("./local-udp-protocol");
+const {
+  batteryLevelFromMillivolts,
+  isLowBatteryMillivolts,
+  normalizePowerSource,
+  resolvePowerSource,
+} = require("./power-source");
+
+const DEFAULT_OPTIMISTIC_STATUS_HOLD_MS = 10 * 60 * 1000;
 
 class LocalPowerShadesApiError extends Error {}
 
@@ -16,15 +24,18 @@ class LocalPowerShadesApi {
     logger = console,
     requestTimeoutMs = 5000,
     statusCacheTTL = 30000,
+    optimisticStatusHoldMs = DEFAULT_OPTIMISTIC_STATUS_HOLD_MS,
     requestFn,
     sendUdpFn,
   } = {}) {
     this.logger = logger;
     this.requestTimeoutMs = Math.max(Number(requestTimeoutMs) || 5000, 1000);
     this.statusCacheTTL = Math.max(Number(statusCacheTTL) || 30000, 1000);
+    this.optimisticStatusHoldMs = Math.max(Number(optimisticStatusHoldMs) || DEFAULT_OPTIMISTIC_STATUS_HOLD_MS, 0);
     this.requestFn = requestFn || ((gateway, query) => requestGateway(gateway, query, this.requestTimeoutMs));
     this.sendUdpFn = sendUdpFn || sendUdpPacket;
-    this.gatewayQueues = new Map();
+    this.statusQueues = new Map();
+    this.commandQueues = new Map();
     this.stateById = new Map();
     this.gateways = normalizeGateways(gateways);
     this.shades = flattenShades(this.gateways);
@@ -68,6 +79,7 @@ class LocalPowerShadesApi {
     state.target_position = target;
     state.moving = false;
     state.direction = null;
+    state.optimisticUntil = Date.now() + this.optimisticStatusHoldMs;
     state.lastUpdated = Date.now();
     shade.gateway.lastStatusRefresh = 0;
   }
@@ -140,7 +152,7 @@ class LocalPowerShadesApi {
   }
 
   async getGatewayVariable(gateway, variable) {
-    const data = await this.enqueue(gateway, () => this.requestFn(gateway, `var=${encodeURIComponent(variable)}`));
+    const data = await this.enqueueStatus(gateway, () => this.requestFn(gateway, `var=${encodeURIComponent(variable)}`));
     const parsed = parseGatewayJson(data);
     if (parsed.length !== 1) {
       throw new LocalPowerShadesApiError(`Unexpected ${variable} response length from ${gateway.host}`);
@@ -155,12 +167,12 @@ class LocalPowerShadesApi {
     }
 
     const packet = buildCommandPacket({ command, channel: ch });
-    await this.enqueue(gateway, () => this.sendUdp(gateway, packet));
+    await this.enqueueCommand(gateway, () => this.sendUdp(gateway, packet));
   }
 
   async sendSetPosition(gateway, channel, percent) {
     const packet = buildSetPositionPacket({ channel, percent });
-    await this.enqueue(gateway, () => this.sendUdp(gateway, packet));
+    await this.enqueueCommand(gateway, () => this.sendUdp(gateway, packet));
   }
 
   async sendUdp(gateway, packet) {
@@ -174,16 +186,24 @@ class LocalPowerShadesApi {
     });
   }
 
-  async enqueue(gateway, task) {
+  async enqueueStatus(gateway, task) {
+    return this.enqueue(this.statusQueues, gateway, task);
+  }
+
+  async enqueueCommand(gateway, task) {
+    return this.enqueue(this.commandQueues, gateway, task);
+  }
+
+  async enqueue(queueMap, gateway, task) {
     const key = gateway.id;
-    const previous = this.gatewayQueues.get(key) || Promise.resolve();
+    const previous = queueMap.get(key) || Promise.resolve();
     const next = previous.catch(() => {}).then(task);
-    this.gatewayQueues.set(key, next);
+    queueMap.set(key, next);
     try {
       return await next;
     } finally {
-      if (this.gatewayQueues.get(key) === next) {
-        this.gatewayQueues.delete(key);
+      if (queueMap.get(key) === next) {
+        queueMap.delete(key);
       }
     }
   }
@@ -199,9 +219,15 @@ class LocalPowerShadesApi {
       const rfDeviceId = status.rfdevs[idx];
 
       if (Number.isFinite(percent) && percent >= 0) {
-        state.current_position = clampPosition(percent);
-        if (!state.moving) {
-          state.target_position = state.current_position;
+        const reportedPosition = clampPosition(percent);
+        if (this.shouldAcceptGatewayPosition(state, reportedPosition)) {
+          state.current_position = reportedPosition;
+          if (!state.moving) {
+            state.target_position = state.current_position;
+          }
+          state.optimisticUntil = 0;
+        } else {
+          state.lastIgnoredPosition = reportedPosition;
         }
       }
       state.batteryMillivolts = Number.isFinite(battery) && battery > 0 ? battery : null;
@@ -209,6 +235,13 @@ class LocalPowerShadesApi {
       state.rfDeviceId = rfDeviceId && rfDeviceId !== "0" ? rfDeviceId : null;
       state.lastUpdated = Date.now();
     }
+  }
+
+  shouldAcceptGatewayPosition(state, reportedPosition) {
+    if (!state.optimisticUntil || Date.now() >= state.optimisticUntil) return true;
+    const target = normalizeMaybePosition(state.target_position);
+    if (target === null) return true;
+    return Math.abs(reportedPosition - target) <= 2;
   }
 
   refreshDiscoveredShades() {
@@ -223,6 +256,10 @@ class LocalPowerShadesApi {
           existing.name = discovered.name;
           existing.disabled = discovered.disabled;
           existing.rfDeviceId = discovered.rfDeviceId;
+          existing.powerSource = discovered.powerSource;
+          existing.batteryMinMillivolts = discovered.batteryMinMillivolts;
+          existing.batteryMaxMillivolts = discovered.batteryMaxMillivolts;
+          existing.lowBatteryMillivolts = discovered.lowBatteryMillivolts;
           continue;
         }
         this.shades.push(discovered);
@@ -243,12 +280,26 @@ class LocalPowerShadesApi {
     const state = this.getState(shade);
     const current = normalizeMaybePosition(state.current_position);
     const target = normalizeMaybePosition(state.target_position);
+    const configuredPowerSource = normalizePowerSource(shade.powerSource);
+    const effectivePowerSource = resolvePowerSource(configuredPowerSource, state.batteryMillivolts);
+    const batteryLevel = effectivePowerSource === "battery"
+      ? batteryLevelFromMillivolts(state.batteryMillivolts, {
+        minMillivolts: shade.batteryMinMillivolts,
+        maxMillivolts: shade.batteryMaxMillivolts,
+      })
+      : null;
     return {
       ...shade,
       current_position: current ?? 0,
       percentage: current ?? 0,
       target_position: target ?? current ?? 0,
       batteryMillivolts: state.batteryMillivolts,
+      batteryLevel,
+      lowBattery: effectivePowerSource === "battery"
+        ? isLowBatteryMillivolts(state.batteryMillivolts, shade.lowBatteryMillivolts)
+        : false,
+      powerSource: configuredPowerSource,
+      effectivePowerSource,
       rx: state.rx,
       rfDeviceId: state.rfDeviceId,
       local: true,
@@ -273,6 +324,8 @@ class LocalPowerShadesApi {
       rfDeviceId: null,
       moving: false,
       direction: null,
+      optimisticUntil: 0,
+      lastIgnoredPosition: null,
       lastUpdated: 0,
     };
     this.stateById.set(shade.id, state);
@@ -332,6 +385,10 @@ function flattenShades(gateways) {
         channel,
         gateway,
         assumePosition: normalizeMaybePosition(rawShade.assumePosition),
+        powerSource: normalizePowerSource(rawShade.powerSource),
+        batteryMinMillivolts: normalizeMaybeNumber(rawShade.batteryMinMillivolts),
+        batteryMaxMillivolts: normalizeMaybeNumber(rawShade.batteryMaxMillivolts),
+        lowBatteryMillivolts: normalizeMaybeNumber(rawShade.lowBatteryMillivolts),
       });
     }
   }
@@ -374,6 +431,10 @@ function discoverChannels(gateway, status, explicitByChannel) {
       channel,
       gateway,
       assumePosition: normalizeMaybePosition(explicit?.assumePosition),
+      powerSource: normalizePowerSource(explicit?.powerSource),
+      batteryMinMillivolts: normalizeMaybeNumber(explicit?.batteryMinMillivolts),
+      batteryMaxMillivolts: normalizeMaybeNumber(explicit?.batteryMaxMillivolts),
+      lowBatteryMillivolts: normalizeMaybeNumber(explicit?.lowBatteryMillivolts),
       rfDeviceId,
     });
   }
@@ -457,6 +518,12 @@ function normalizeMaybePosition(value) {
   return clampPosition(num);
 }
 
+function normalizeMaybeNumber(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : undefined;
+}
+
 function clampPosition(value) {
   return Math.max(0, Math.min(100, Number(value)));
 }
@@ -468,4 +535,6 @@ module.exports = {
   parseChannelValues,
   parseGatewayChannelNames,
   normalizeGatewayChannelName,
+  normalizeGateways,
+  requestGateway,
 };

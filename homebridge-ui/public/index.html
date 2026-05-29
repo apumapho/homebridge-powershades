@@ -1,0 +1,69 @@
+<link rel="stylesheet" href="./styles.css">
+
+<div class="ps-ui">
+  <div class="ps-header">
+    <div>
+      <h4>PowerShades</h4>
+      <p>Configure local RF gateways, discovered shade channels, power source, and cloud fallback settings.</p>
+    </div>
+    <div class="ps-actions">
+      <button class="btn btn-elegant" id="refreshAll" type="button">Refresh</button>
+      <button class="btn btn-primary" id="saveConfig" type="button">Save</button>
+    </div>
+  </div>
+
+  <div class="ps-grid ps-settings">
+    <section class="ps-panel">
+      <h5>Control</h5>
+      <label class="ps-label" for="controlMode">Mode</label>
+      <select id="controlMode" class="form-control">
+        <option value="local-udp">Local RF Gateway UDP</option>
+        <option value="cloud">Cloud API fallback</option>
+      </select>
+      <div class="ps-inline">
+        <label>
+          Local status cache
+          <input id="localStatusCacheTTL" class="form-control" type="number" min="5" max="300">
+        </label>
+        <label>
+          Gateway timeout
+          <input id="localRequestTimeoutMs" class="form-control" type="number" min="1000" max="30000">
+        </label>
+      </div>
+    </section>
+
+    <section class="ps-panel">
+      <h5>Cloud Fallback</h5>
+      <div class="ps-inline">
+        <label>
+          Email
+          <input id="email" class="form-control" type="email" autocomplete="username">
+        </label>
+        <label>
+          Password
+          <input id="password" class="form-control" type="password" autocomplete="current-password">
+        </label>
+      </div>
+      <details>
+        <summary>Legacy API token</summary>
+        <input id="apiToken" class="form-control" type="password" autocomplete="off">
+      </details>
+    </section>
+  </div>
+
+  <section class="ps-panel ps-gateway-tools">
+    <div>
+      <h5>Gateways</h5>
+      <p>Add an RF Gateway V2 host, discover channels, then choose which shades HomeKit should expose.</p>
+    </div>
+    <div class="ps-actions">
+      <input id="newGatewayHost" class="form-control" type="text" placeholder="192.168.1.50 or hostname">
+      <button class="btn btn-primary" id="addGateway" type="button">Add Gateway</button>
+    </div>
+  </section>
+
+  <div id="messages" class="ps-messages" aria-live="polite"></div>
+  <div id="gateways"></div>
+</div>
+
+<script src="./app.js"></script>

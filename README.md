@@ -9,9 +9,10 @@ A [Homebridge](https://homebridge.io) plugin for [PowerShades](https://powershad
 
 ## Features
 
-- Cloud control through the PowerShades API with email/password authentication.
 - Local RF Gateway V2 control through the same UDP protocol used by PowerShades Config.NET.
+- Optional cloud fallback through the PowerShades API with email/password authentication.
 - Automatic local channel discovery from gateway names, RF device IDs, and feedback status.
+- HomeKit battery service for battery-powered shades, with hardwired shade suppression.
 - Adaptive polling with faster updates after user activity.
 - Full HomeKit `WindowCovering` integration for Siri, Home app, scenes, and automations.
 
@@ -21,7 +22,7 @@ A [Homebridge](https://homebridge.io) plugin for [PowerShades](https://powershad
 
 1. Search for `homebridge-powershades` in the Homebridge Config UI X plugins tab
 2. Click **Install**
-3. Configure with your PowerShades account credentials
+3. Configure local RF gateway hosts in the plugin settings UI
 
 ### Option 2: Via npm
 
@@ -33,66 +34,17 @@ npm install -g homebridge-powershades
 
 Configure the plugin through the Homebridge Config UI X interface, or manually edit your `config.json`.
 
-### Authentication
-
-You can authenticate using **either** your email/password (recommended) or an API token:
-
-**Option 1: Email and Password (Recommended)**
-
-Use your PowerShades account credentials for reliable authentication.
-
-```json
-{
-  "platforms": [
-    {
-      "platform": "PowerShades",
-      "name": "PowerShades",
-      "email": "your@email.com",
-      "password": "your-password",
-      "pollInterval": 10,
-      "fastPollInterval": 1,
-      "fastPollDuration": 30,
-      "shadeListCacheTTL": 300
-    }
-  ]
-}
-```
-
-**Option 2: API Token (Deprecated - Unstable)**
-
-> ⚠️ **Note:** API tokens are unstable and periodically deleted from dashboard.powershades.com (as of November 2025). Email/password authentication is strongly recommended.
-
-Get your API token from the PowerShades dashboard if you still wish to use it:
-1. Go to [PowerShades Dashboard](https://dashboard.powershades.com)
-2. Click your name (top right)
-3. Click "My Account"
-4. Under "Authorized Applications", click "Get New API Token"
-
-```json
-{
-  "platforms": [
-    {
-      "platform": "PowerShades",
-      "name": "PowerShades",
-      "apiToken": "your-api-token-here",
-      "pollInterval": 10,
-      "fastPollInterval": 1,
-      "fastPollDuration": 30,
-      "shadeListCacheTTL": 300
-    }
-  ]
-}
-```
-
 ### Local RF Gateway Mode
 
-Local mode is opt-in and does not require PowerShades cloud credentials. The
-recommended local mode is `local-udp`, which uses the RF Gateway V2 local UDP
-protocol on port 42. This is the same local protocol used by PowerShades
-Config.NET and supports native 0-100% position commands.
+Local mode is the default control path and does not require PowerShades cloud
+credentials. Configure it in Homebridge Config UI X, or manually add a local RF
+Gateway V2 host. The custom settings UI can discover channels, show current
+gateway feedback, and save shade names, enabled channels, and power source
+overrides.
 
-At minimum, configure the local gateway host. The plugin discovers channels that
-have a non-default gateway name or a linked RF device ID.
+The `local-udp` mode uses the RF Gateway V2 local UDP protocol on port 42. This
+is the same local protocol used by PowerShades Config.NET and supports native
+0-100% position commands.
 
 ```json
 {
@@ -113,7 +65,7 @@ have a non-default gateway name or a linked RF device ID.
 ```
 
 You can add optional shade overrides when you need stable custom names, explicit
-channel inclusion, or exclusions:
+channel inclusion, exclusions, fallback positions, or power source settings:
 
 ```json
 {
@@ -128,7 +80,13 @@ channel inclusion, or exclusions:
           "shades": [
             {
               "name": "Kitchen Window",
-              "channel": 5
+              "channel": 5,
+              "powerSource": "battery"
+            },
+            {
+              "name": "Living Room Door",
+              "channel": 8,
+              "powerSource": "hardwired"
             }
           ]
         }
@@ -159,14 +117,36 @@ npm run local:udp -- discover --host 192.168.1.50
 The command prints discovered channels, current feedback values, and a suggested
 `localGateways` config block.
 
+### Cloud Fallback
+
+Cloud mode uses your PowerShades account credentials. It is useful when local
+gateways are unavailable or when you prefer dashboard-discovered cloud shades.
+
+```json
+{
+  "platforms": [
+    {
+      "platform": "PowerShades",
+      "name": "PowerShades",
+      "controlMode": "cloud",
+      "email": "your@email.com",
+      "password": "your-password"
+    }
+  ]
+}
+```
+
+Legacy API tokens are still accepted for cloud mode, but email/password is the
+preferred cloud credential path.
+
 ### Configuration Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `controlMode` | `cloud` | `cloud` or `local-udp` for native local RF Gateway V2 percentage control |
-| `email` | *optional* | Your PowerShades account email (recommended) |
-| `password` | *optional* | Your PowerShades account password (recommended) |
-| `apiToken` | *optional* | Your PowerShades API token (deprecated - unstable, periodically deleted from dashboard) |
+| `controlMode` | `local-udp` | `local-udp` for native local RF Gateway V2 percentage control, or `cloud` for cloud fallback |
+| `email` | *optional* | PowerShades account email, only required for cloud mode |
+| `password` | *optional* | PowerShades account password, only required for cloud mode |
+| `apiToken` | *optional* | Legacy PowerShades API token for cloud mode |
 | `localGateways` | `[]` | Local RF Gateway V2 hosts, discovery settings, and optional shade overrides |
 | `localRequestTimeoutMs` | `5000` | Timeout for local gateway status HTTP requests |
 | `localStatusCacheTTL` | `30` | Local gateway status cache duration in seconds |
@@ -174,7 +154,12 @@ The command prints discovered channels, current feedback values, and a suggested
 | `fastPollInterval` | `1` | Polling interval in seconds after activity (1-5) |
 | `fastPollDuration` | `30` | How long to use fast polling after activity (5-120) |
 | `shadeListCacheTTL` | `300` | How long to cache shade list in seconds (60-3600) |
-| `baseUrl` | `https://api.powershades.com` | Custom API endpoint (optional) |
+| `baseUrl` | `https://api.powershades.com` | Custom cloud API endpoint (optional) |
+
+Shade overrides inside `localGateways[].shades[]` support `powerSource` values
+of `auto`, `battery`, `hardwired`, or `unknown`. Battery shades expose HomeKit
+`BatteryLevel` and `StatusLowBattery` when the gateway reports voltage.
+Hardwired shades do not expose a HomeKit battery service.
 
 ## How It Works
 

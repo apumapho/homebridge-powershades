@@ -61,11 +61,52 @@ describe('LocalPowerShadesApi', () => {
     assert.strictEqual(shades[0].name, 'Left');
     assert.strictEqual(shades[0].current_position, 100);
     assert.strictEqual(shades[0].batteryMillivolts, 12280);
+    assert.strictEqual(shades[0].effectivePowerSource, 'hardwired');
+    assert.strictEqual(shades[0].batteryLevel, null);
     assert.strictEqual(shades[0].rx, -71);
     assert.strictEqual(shades[0].rfDeviceId, 'abc');
     assert.strictEqual(shades[1].current_position, 40);
     assert.strictEqual(shades[1].batteryMillivolts, null);
     assert.strictEqual(shades[1].rfDeviceId, null);
+  });
+
+  test('getShades should expose configured battery metadata for battery shades', async () => {
+    const responses = {
+      percent: '["50"]',
+      battery: '["7700"]',
+      rx: '["-65"]',
+      rfdevs: '["abc"]',
+    };
+    const api = new LocalPowerShadesApi({
+      logger: silentLogger,
+      gateways: [{
+        host: '192.168.1.10',
+        serial: 'gw1',
+        discoverChannels: false,
+        shades: [
+          {
+            name: 'Battery Shade',
+            channel: 1,
+            powerSource: 'battery',
+            batteryMinMillivolts: 7600,
+            batteryMaxMillivolts: 7800,
+            lowBatteryMillivolts: 7650,
+          },
+        ],
+      }],
+      requestFn: async (_gateway, query) => responses[query.replace('var=', '')],
+    });
+
+    const [shade] = await api.getShades();
+
+    assert.strictEqual(shade.powerSource, 'battery');
+    assert.strictEqual(shade.effectivePowerSource, 'battery');
+    assert.strictEqual(shade.batteryMillivolts, 7700);
+    assert.strictEqual(shade.batteryLevel, 50);
+    assert.strictEqual(shade.batteryMinMillivolts, 7600);
+    assert.strictEqual(shade.batteryMaxMillivolts, 7800);
+    assert.strictEqual(shade.lowBatteryMillivolts, 7650);
+    assert.strictEqual(shade.lowBattery, false);
   });
 
   test('UDP mode should discover named and linked gateway channels', async () => {
@@ -140,6 +181,7 @@ describe('LocalPowerShadesApi', () => {
     const api = new LocalPowerShadesApi({
       logger: silentLogger,
       gateways: [{ host: '192.168.1.10', serial: 'gw1' }],
+      optimisticStatusHoldMs: 600000,
       requestFn: async (_gateway, query) => responses[query.replace('var=', '')],
       sendUdpFn: async (args) => {
         sent.push(args);
@@ -160,8 +202,82 @@ describe('LocalPowerShadesApi', () => {
 
     shade.gateway.lastStatusRefresh = 0;
     await api.refreshShadeStates();
+    assert.strictEqual(api.getState(shade).current_position, 50);
+    assert.strictEqual(api.getState(shade).target_position, 50);
+    assert.strictEqual(api.getState(shade).lastIgnoredPosition, 20);
+
+    api.getState(shade).optimisticUntil = 0;
+    shade.gateway.lastStatusRefresh = 0;
+    await api.refreshShadeStates();
     assert.strictEqual(api.getState(shade).current_position, 20);
     assert.strictEqual(api.getState(shade).target_position, 20);
+  });
+
+  test('UDP mode should accept gateway feedback when it confirms the optimistic target', async () => {
+    const sent = [];
+    const responses = {
+      percent: '["20"]',
+      battery: '["12280"]',
+      rx: '["-71"]',
+      rfdevs: '["abc"]',
+      chnames1: '["Kitchen Window"]',
+      chnames2: '["Channel 11"]',
+      chnames3: '["Channel 21"]',
+    };
+    const api = new LocalPowerShadesApi({
+      logger: silentLogger,
+      gateways: [{ host: '192.168.1.10', serial: 'gw1' }],
+      requestFn: async (_gateway, query) => responses[query.replace('var=', '')],
+      sendUdpFn: async (args) => {
+        sent.push(args);
+        return { packet: args.packet, response: args.packet, rinfo: { address: args.host, port: args.port } };
+      },
+    });
+    const [shade] = await api.getShades();
+
+    await api.moveShade(shade, 50);
+    responses.percent = '["50"]';
+    shade.gateway.lastStatusRefresh = 0;
+    await api.refreshShadeStates();
+
+    assert.strictEqual(api.getState(shade).current_position, 50);
+    assert.strictEqual(api.getState(shade).target_position, 50);
+    assert.strictEqual(api.getState(shade).optimisticUntil, 0);
+  });
+
+  test('UDP commands should not wait behind slow gateway status requests', async () => {
+    let releaseStatus;
+    const statusStarted = new Promise((resolve) => {
+      releaseStatus = resolve;
+    });
+    const sent = [];
+    const api = new LocalPowerShadesApi({
+      logger: silentLogger,
+      gateways: [{
+        host: '192.168.1.10',
+        serial: 'gw1',
+        discoverChannels: false,
+        shades: [{ name: 'Left', channel: 1 }],
+      }],
+      requestFn: async () => {
+        await statusStarted;
+        return '["0"]';
+      },
+      sendUdpFn: async (args) => {
+        sent.push(args);
+        return { packet: args.packet, response: args.packet, rinfo: { address: args.host, port: args.port } };
+      },
+    });
+    const [shade] = api.shades;
+
+    const statusPromise = api.refreshShadeStates();
+    await Promise.resolve();
+    await api.moveShade(shade, 75);
+    releaseStatus();
+    await statusPromise;
+
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].packet.readUInt16LE(10), 75);
   });
 
   test('UDP mode should send native stop packets', async () => {

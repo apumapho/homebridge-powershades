@@ -2,6 +2,11 @@
 
 const { PowerShadesApi } = require("./api");
 const { LocalPowerShadesApi } = require("./local-api");
+const {
+  batteryLevelFromMillivolts,
+  isLowBatteryMillivolts,
+  shouldExposeBatteryService,
+} = require("./power-source");
 
 const PLUGIN_NAME = "homebridge-powershades";
 const PLATFORM_NAME = "PowerShades";
@@ -23,7 +28,7 @@ class PowerShadesPlatform {
     this.password = this.config.password;
     this.apiToken = this.config.apiToken;
     this.baseUrl = this.config.baseUrl;
-    this.controlMode = normalizeControlMode(this.config.controlMode || this.config.mode || "cloud");
+    this.controlMode = resolveConfiguredControlMode(this.config);
     this.isLocalMode = this.controlMode === "local-udp";
     this.shadeListCache = [];
     this.shadeListCacheTime = 0;
@@ -40,6 +45,7 @@ class PowerShadesPlatform {
         logger: this.log,
         requestTimeoutMs: this.config.localRequestTimeoutMs,
         statusCacheTTL: (Number(this.config.localStatusCacheTTL) || 30) * 1000,
+        optimisticStatusHoldMs: this.config.localOptimisticStatusHoldMs,
       });
       if (!this.psApi.gateways.length) {
         this.log.error("[PowerShades] Local control mode requires at least one configured local gateway");
@@ -264,7 +270,7 @@ class PowerShadesPlatform {
     // Handlers
     service
       .getCharacteristic(this.api.hap.Characteristic.TargetPosition)
-      .onSet((value) => this.handleSetTargetPosition(shade, value));
+      .onSet((value) => this.handleSetTargetPosition(accessory, shade, value));
 
     service
       .getCharacteristic(this.api.hap.Characteristic.CurrentPosition)
@@ -279,9 +285,10 @@ class PowerShadesPlatform {
     service.updateCharacteristic(this.api.hap.Characteristic.CurrentPosition, current);
     service.updateCharacteristic(this.api.hap.Characteristic.TargetPosition, current);
     service.updateCharacteristic(this.api.hap.Characteristic.PositionState, this.api.hap.Characteristic.PositionState.STOPPED);
+    this.updateBatteryService(accessory, shade);
   }
 
-  async handleSetTargetPosition(shade, value) {
+  async handleSetTargetPosition(accessory, shade, value) {
     const target = clampPosition(value);
     const modeLabel = this.controlMode === "local-udp"
       ? "via local UDP"
@@ -289,6 +296,7 @@ class PowerShadesPlatform {
     this.log.info(`[PowerShades] Setting "${shade.name}" to ${target}% ${modeLabel}`);
     try {
       await this.psApi.moveShade(this.isLocalMode ? shade : shade.name, target);
+      this.updateShadeTargetState(accessory, target);
       // Trigger fast polling after user activity
       this.lastActivityTime = Date.now();
       this.restartPolling();
@@ -296,6 +304,26 @@ class PowerShadesPlatform {
       this.log.error("[PowerShades] Move failed:", err.message || err);
       throw err;
     }
+  }
+
+  updateShadeTargetState(accessory, target) {
+    if (!accessory) return;
+    const shade = accessory.context.shade || {};
+    accessory.context.shade = {
+      ...shade,
+      current_position: target,
+      percentage: target,
+      position: target,
+      target_position: target,
+    };
+    const service = accessory.getService(this.api.hap.Service.WindowCovering);
+    if (!service) return;
+    service.updateCharacteristic(this.api.hap.Characteristic.CurrentPosition, target);
+    service.updateCharacteristic(this.api.hap.Characteristic.TargetPosition, target);
+    service.updateCharacteristic(
+      this.api.hap.Characteristic.PositionState,
+      this.api.hap.Characteristic.PositionState.STOPPED,
+    );
   }
 
   handleGetCurrentPosition(accessory) {
@@ -315,6 +343,54 @@ class PowerShadesPlatform {
     }
     // Without motion telemetry, report STOPPED.
     return this.api.hap.Characteristic.PositionState.STOPPED;
+  }
+
+  updateBatteryService(accessory, shade) {
+    const batteryService = accessory.getService(this.api.hap.Service.Battery);
+    if (!this.shouldExposeBatteryForShade(shade)) {
+      if (batteryService) {
+        accessory.removeService(batteryService);
+      }
+      return;
+    }
+
+    const service = batteryService || accessory.addService(this.api.hap.Service.Battery, `${shade.name} Battery`, "battery");
+    service.setCharacteristic(this.api.hap.Characteristic.Name, `${shade.name} Battery`);
+    if (!service._powershadesBatteryHandlers) {
+      service
+        .getCharacteristic(this.api.hap.Characteristic.BatteryLevel)
+        .onGet(() => this.getBatteryLevel(accessory.context.shade));
+      service
+        .getCharacteristic(this.api.hap.Characteristic.StatusLowBattery)
+        .onGet(() => this.getLowBatteryStatus(accessory.context.shade));
+      service._powershadesBatteryHandlers = true;
+    }
+
+    service.updateCharacteristic(this.api.hap.Characteristic.BatteryLevel, this.getBatteryLevel(shade));
+    service.updateCharacteristic(this.api.hap.Characteristic.StatusLowBattery, this.getLowBatteryStatus(shade));
+  }
+
+  shouldExposeBatteryForShade(shade) {
+    return shouldExposeBatteryService(shade?.powerSource, shade?.batteryMillivolts);
+  }
+
+  getBatteryLevel(shade) {
+    if (Number.isFinite(Number(shade?.batteryLevel))) {
+      return clampPosition(shade.batteryLevel);
+    }
+    return batteryLevelFromMillivolts(shade?.batteryMillivolts, {
+      minMillivolts: shade?.batteryMinMillivolts,
+      maxMillivolts: shade?.batteryMaxMillivolts,
+    }) ?? 0;
+  }
+
+  getLowBatteryStatus(shade) {
+    const low = shade?.lowBattery !== undefined
+      ? Boolean(shade.lowBattery)
+      : isLowBatteryMillivolts(shade?.batteryMillivolts, shade?.lowBatteryMillivolts);
+    return low
+      ? this.api.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW
+      : this.api.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
   }
 
   async handleSetGroupTargetPosition(group, value) {
@@ -401,6 +477,7 @@ class PowerShadesPlatform {
         service.updateCharacteristic(this.api.hap.Characteristic.CurrentPosition, pos);
         service.updateCharacteristic(this.api.hap.Characteristic.TargetPosition, target);
         service.updateCharacteristic(this.api.hap.Characteristic.PositionState, this.handleGetPositionState(accessory));
+        this.updateBatteryService(accessory, shade);
       }
 
       // Poll groups
@@ -458,6 +535,18 @@ function normalizeControlMode(value) {
   return "cloud";
 }
 
+function resolveConfiguredControlMode(config = {}) {
+  if (config.controlMode || config.mode) {
+    return normalizeControlMode(config.controlMode || config.mode);
+  }
+  const hasLocalGateways = Array.isArray(config.localGateways || config.gateways)
+    && (config.localGateways || config.gateways).length > 0;
+  if (hasLocalGateways) return "local-udp";
+  if (config.apiToken || (config.email && config.password)) return "cloud";
+  return "local-udp";
+}
+
 module.exports.PLUGIN_NAME = PLUGIN_NAME;
 module.exports.PLATFORM_NAME = PLATFORM_NAME;
 module.exports.normalizeControlMode = normalizeControlMode;
+module.exports.resolveConfiguredControlMode = resolveConfiguredControlMode;
